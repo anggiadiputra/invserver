@@ -4,12 +4,60 @@ import { authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Get all services
+// Get all services (supports pagination via ?page=&limit=&search=&status=)
 router.get('/', authMiddleware, async (req, res) => {
   try {
+    const { page, limit, status, search } = req.query;
+
+    const conditions = ['user_id = $1'];
+    const params = [req.userId];
+    let paramIdx = 2;
+
+    if (status) {
+      conditions.push(`status = $${paramIdx++}`);
+      params.push(status);
+    }
+
+    if (search) {
+      conditions.push(`(name ILIKE $${paramIdx} OR description ILIKE $${paramIdx})`);
+      params.push(`%${search}%`);
+      paramIdx++;
+    }
+
+    const whereClause = conditions.join(' AND ');
+
+    if (page && limit) {
+      const pageNum = Math.max(1, parseInt(page));
+      const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+      const offset = (pageNum - 1) * limitNum;
+
+      const [dataResult, countResult] = await Promise.all([
+        pool.query(
+          `SELECT * FROM services WHERE ${whereClause} ORDER BY created_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
+          [...params, limitNum, offset]
+        ),
+        pool.query(
+          `SELECT COUNT(*) FROM services WHERE ${whereClause}`,
+          params
+        )
+      ]);
+
+      const total = parseInt(countResult.rows[0].count);
+      return res.json({
+        data: dataResult.rows,
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum)
+        }
+      });
+    }
+
+    // No pagination – return all
     const result = await pool.query(
-      'SELECT * FROM services WHERE user_id = $1 ORDER BY created_at DESC',
-      [req.userId]
+      `SELECT * FROM services WHERE ${whereClause} ORDER BY created_at DESC`,
+      params
     );
     res.json(result.rows);
   } catch (error) {
@@ -18,12 +66,30 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
+// Batch delete services
+router.post('/batch-delete', authMiddleware, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Valid IDs array is required' });
+    }
+
+    await pool.query(
+      'DELETE FROM services WHERE id = ANY($1::int[]) AND user_id = $2',
+      [ids, req.userId]
+    );
+
+    res.json({ message: `${ids.length} services deleted successfully` });
+  } catch (error) {
+    console.error('Error batch deleting services:', error);
+    res.status(500).json({ error: 'Failed to batch delete services' });
+  }
+});
+
 // Create service
 router.post('/', authMiddleware, async (req, res) => {
   try {
-    const { name, description, price, tax_rate } = req.body;
-
-    console.log('Creating service with data:', { name, description, price, tax_rate, userId: req.userId });
+    const { name, description, price, tax_rate, status = 'active' } = req.body;
 
     if (!name || !price) {
       return res.status(400).json({ error: 'Name and price are required' });
@@ -35,22 +101,16 @@ router.post('/', authMiddleware, async (req, res) => {
     }
 
     const result = await pool.query(
-      'INSERT INTO services (user_id, name, description, price, tax_rate) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [req.userId, name, description, priceValue, tax_rate || 0]
+      'INSERT INTO services (user_id, name, description, price, tax_rate, status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [req.userId, name, description, priceValue, tax_rate || 0, status]
     );
 
-    console.log('Service created successfully:', result.rows[0]);
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error creating service:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stack: error.stack,
-      code: error.code
-    });
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to create service',
-      details: error.message 
+      details: error.message
     });
   }
 });
@@ -62,7 +122,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
       'SELECT * FROM services WHERE id = $1 AND user_id = $2',
       [req.params.id, req.userId]
     );
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Service not found' });
     }
@@ -77,11 +137,18 @@ router.get('/:id', authMiddleware, async (req, res) => {
 // Update service
 router.put('/:id', authMiddleware, async (req, res) => {
   try {
-    const { name, description, price, tax_rate } = req.body;
-    
+    const { name, description, price, tax_rate, status } = req.body;
+
     const result = await pool.query(
-      'UPDATE services SET name = $1, description = $2, price = $3, tax_rate = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5 AND user_id = $6 RETURNING *',
-      [name, description, price, tax_rate, req.params.id, req.userId]
+      `UPDATE services SET 
+        name = COALESCE($1, name), 
+        description = COALESCE($2, description), 
+        price = COALESCE($3, price), 
+        tax_rate = COALESCE($4, tax_rate), 
+        status = COALESCE($5, status),
+        updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $6 AND user_id = $7 RETURNING *`,
+      [name, description, price, tax_rate, status, req.params.id, req.userId]
     );
 
     if (result.rows.length === 0) {

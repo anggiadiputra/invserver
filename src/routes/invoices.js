@@ -123,9 +123,9 @@ router.post('/', authMiddleware, async (req, res) => {
       await client.query('BEGIN');
 
       // Calculate totals using utility
-      const { totalAmount, taxAmount } = calculateInvoiceTotals(items, { 
-        show_discount: !!show_discount, 
-        show_tax: !!show_tax 
+      const { totalAmount, taxAmount } = calculateInvoiceTotals(items, {
+        show_discount: !!show_discount,
+        show_tax: !!show_tax
       });
 
       // Create invoice with display preferences
@@ -180,7 +180,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
         [identifier, req.userId]
       );
     }
-    
+
     if (invoiceResult.rows.length === 0) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
@@ -245,9 +245,9 @@ router.put('/:id', authMiddleware, async (req, res) => {
       await client.query('BEGIN');
 
       // Calculate totals using utility
-      const { totalAmount, taxAmount } = calculateInvoiceTotals(items, { 
-        show_discount: !!show_discount, 
-        show_tax: !!show_tax 
+      const { totalAmount, taxAmount } = calculateInvoiceTotals(items, {
+        show_discount: !!show_discount,
+        show_tax: !!show_tax
       });
 
       // Update invoice with display preferences
@@ -315,6 +315,65 @@ router.put('/:id', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error updating invoice:', error);
     res.status(500).json({ error: 'Failed to update invoice' });
+  }
+});
+
+// Batch delete invoices
+router.post('/batch-delete', authMiddleware, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Valid IDs array is required' });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Delete invoice items first (cascade handles this usually, but being safe)
+      await client.query('DELETE FROM invoice_items WHERE invoice_id = ANY($1::int[])', [ids]);
+      // Delete invoices
+      await client.query('DELETE FROM invoices WHERE id = ANY($1::int[]) AND user_id = $2', [ids, req.userId]);
+      await client.query('COMMIT');
+      res.json({ message: `${ids.length} invoices deleted successfully` });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error batch deleting invoices:', error);
+    res.status(500).json({ error: 'Failed to batch delete invoices' });
+  }
+});
+
+// Batch update invoice status
+router.post('/batch-status', authMiddleware, async (req, res) => {
+  try {
+    const { ids, status } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0 || !status) {
+      return res.status(400).json({ error: 'Valid IDs array and status are required' });
+    }
+
+    const result = await pool.query(
+      'UPDATE invoices SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = ANY($2::int[]) AND user_id = $3 RETURNING id',
+      [status, ids, req.userId]
+    );
+
+    // Trigger auto-notifications for paid/sent status (limited to avoid spam)
+    if (status === 'paid' || status === 'sent') {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      for (const row of result.rows) {
+        sendInvoiceNotifications(row.id, req.userId, frontendUrl).catch(err => {
+          console.error(`Failed auto-notify for invoice ${row.id}:`, err);
+        });
+      }
+    }
+
+    res.json({ message: `${result.rowCount} invoices updated successfully` });
+  } catch (error) {
+    console.error('Error batch updating invoice status:', error);
+    res.status(500).json({ error: 'Failed to batch update invoices' });
   }
 });
 

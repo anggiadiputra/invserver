@@ -31,7 +31,7 @@ router.post('/test-connection', authMiddleware, async (req, res) => {
         'SELECT fonnte_test_target FROM company_settings WHERE user_id = $1',
         [req.userId]
       );
-      
+
       if (settingsResult.rows.length > 0 && settingsResult.rows[0].fonnte_test_target) {
         targetToSend = settingsResult.rows[0].fonnte_test_target;
       } else {
@@ -73,7 +73,7 @@ router.post('/validate-number', authMiddleware, async (req, res) => {
 
     // Get global Fonnte token from system settings
     const systemResult = await pool.query('SELECT fonnte_token FROM system_settings LIMIT 1');
-    
+
     if (systemResult.rows.length === 0 || !systemResult.rows[0].fonnte_token) {
       return res.status(400).json({
         success: false,
@@ -116,7 +116,7 @@ router.post('/send', authMiddleware, async (req, res) => {
 
     // Get global Fonnte token from system settings
     const systemResult = await pool.query('SELECT fonnte_token FROM system_settings LIMIT 1');
-    
+
     if (systemResult.rows.length === 0 || !systemResult.rows[0].fonnte_token) {
       return res.status(400).json({
         success: false,
@@ -227,7 +227,7 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
 
     // Get global Fonnte token from system settings
     const systemResult = await pool.query('SELECT fonnte_token FROM system_settings LIMIT 1');
-    
+
     if (systemResult.rows.length === 0 || !systemResult.rows[0].fonnte_token) {
       return res.status(400).json({
         success: false,
@@ -292,10 +292,10 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
 
     // Build invoice message
     let message = customMessage || '';
-    
+
     if (!customMessage) {
       let tpl = company.wa_invoice_template;
-      
+
       if (invoice.status === 'paid' && company.wa_paid_template) {
         tpl = company.wa_paid_template;
       } else if ((invoice.status === 'overdue' || invoice.status === 'sent') && company.wa_reminder_template) {
@@ -315,38 +315,38 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
         message = tpl;
       } else {
         message = `Yth. ${customer?.name || 'Bapak/Ibu'},\n\n`;
-      message += `Berikut kami sampaikan invoice dengan detail:\n\n`;
-      message += `📄 Invoice: ${invoice.invoice_number}\n`;
-      message += `📅 Tanggal: ${formatDate(invoice.issue_date)}\n`;
-      message += `💰 Total: ${formatRupiah(invoice.total_amount)}\n`;
-      message += `📅 Jatuh Tempo: ${formatDate(invoice.due_date)}\n`;
-      message += `📊 Status: ${invoice.status.toUpperCase()}\n\n`;
+        message += `Berikut kami sampaikan invoice dengan detail:\n\n`;
+        message += `📄 Invoice: ${invoice.invoice_number}\n`;
+        message += `📅 Tanggal: ${formatDate(invoice.issue_date)}\n`;
+        message += `💰 Total: ${formatRupiah(invoice.total_amount)}\n`;
+        message += `📅 Jatuh Tempo: ${formatDate(invoice.due_date)}\n`;
+        message += `📊 Status: ${invoice.status.toUpperCase()}\n\n`;
 
-      if (items.length > 0) {
-        message += `Detail item:\n`;
-        items.forEach((item, index) => {
-          message += `${index + 1}. ${item.description}\n`;
-          message += `   ${item.quantity} x ${formatRupiah(item.unit_price)} = ${formatRupiah(item.quantity * item.unit_price)}\n`;
-        });
-        message += `\n`;
+        if (items.length > 0) {
+          message += `Detail item:\n`;
+          items.forEach((item, index) => {
+            message += `${index + 1}. ${item.description}\n`;
+            message += `   ${item.quantity} x ${formatRupiah(item.unit_price)} = ${formatRupiah(item.quantity * item.unit_price)}\n`;
+          });
+          message += `\n`;
+        }
+
+        if (invoice.tax_amount > 0) {
+          message += `Pajak: ${formatRupiah(invoice.tax_amount)}\n`;
+        }
+
+        if (invoice.notes) {
+          message += `\nCatatan: ${invoice.notes}\n`;
+        }
+
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const generatedUrl = publicUrl || `${frontendUrl}/public/invoice/${invoice.invoice_number}`;
+        message += `\nLihat detail invoice dan lakukan pembayaran melalui tautan berikut:\n${generatedUrl}\n\n`;
+        message += `Mohon pembayaran dapat dilakukan sebelum tanggal jatuh tempo.\n\n`;
+        message += `Terima kasih atas kerjasamanya.\n\n`;
+        message += `Salam,\n${company.company_name || 'Kami'}\n`;
+        message += `${company.company_phone || ''}`;
       }
-
-      if (invoice.tax_amount > 0) {
-        message += `Pajak: ${formatRupiah(invoice.tax_amount)}\n`;
-      }
-
-      if (invoice.notes) {
-        message += `\nCatatan: ${invoice.notes}\n`;
-      }
-
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      const generatedUrl = publicUrl || `${frontendUrl}/public/invoice/${invoice.invoice_number}`;
-      message += `\nLihat detail invoice dan lakukan pembayaran melalui tautan berikut:\n${generatedUrl}\n\n`;
-      message += `Mohon pembayaran dapat dilakukan sebelum tanggal jatuh tempo.\n\n`;
-      message += `Terima kasih atas kerjasamanya.\n\n`;
-      message += `Salam,\n${company.company_name || 'Kami'}\n`;
-      message += `${company.company_phone || ''}`;
-    }
     }
 
     console.log('Sending invoice', invoiceId, 'to', customerPhone);
@@ -458,6 +458,26 @@ router.get('/logs/:id', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error fetching WA log detail:', error);
     res.status(500).json({ error: 'Failed to fetch log detail' });
+  }
+});
+
+// Batch delete WhatsApp logs
+router.post('/logs/batch-delete', authMiddleware, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Valid IDs array is required' });
+    }
+
+    await pool.query(
+      'DELETE FROM whatsapp_logs WHERE id = ANY($1::int[]) AND user_id = $2',
+      [ids, req.userId]
+    );
+
+    res.json({ message: `${ids.length} WhatsApp logs deleted successfully` });
+  } catch (error) {
+    console.error('Error batch deleting WhatsApp logs:', error);
+    res.status(500).json({ error: 'Failed to batch delete WhatsApp logs' });
   }
 });
 

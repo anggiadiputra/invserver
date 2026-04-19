@@ -26,8 +26,18 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
     const customer = customerResult.rows[0];
     if (!customer || !customer.email) return res.status(400).json({ success: false, message: 'Customer email is not set' });
 
-    const settingsResult = await pool.query('SELECT * FROM company_settings WHERE user_id = $1', [req.userId]);
-    const company = settingsResult.rows[0] || {};
+    const companyResult = await pool.query('SELECT * FROM company_settings WHERE user_id = $1', [req.userId]);
+    const companySettings = companyResult.rows[0] || {};
+    
+    // Fetch global system settings as fallback
+    const systemResult = await pool.query('SELECT * FROM system_settings LIMIT 1');
+    const systemSettings = systemResult.rows[0] || {};
+
+    // Merge settings: User settings take priority, system settings as fallback
+    const company = {
+      ...systemSettings,
+      ...Object.fromEntries(Object.entries(companySettings).filter(([_, v]) => v != null && v !== ''))
+    };
 
     if (!company.smtp_host || !company.smtp_user || !company.smtp_pass) {
       return res.status(400).json({ success: false, message: 'SMTP settings not configured' });
@@ -171,6 +181,26 @@ router.get('/logs/:id', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error fetching Email log detail:', error);
     res.status(500).json({ error: 'Failed to fetch log detail' });
+  }
+});
+
+// Batch delete email logs
+router.post('/logs/batch-delete', authMiddleware, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Valid IDs array is required' });
+    }
+
+    await pool.query(
+      'DELETE FROM email_logs WHERE id = ANY($1::int[]) AND user_id = $2',
+      [ids, req.userId]
+    );
+
+    res.json({ message: `${ids.length} email logs deleted successfully` });
+  } catch (error) {
+    console.error('Error batch deleting email logs:', error);
+    res.status(500).json({ error: 'Failed to batch delete email logs' });
   }
 });
 

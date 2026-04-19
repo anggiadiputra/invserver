@@ -340,6 +340,24 @@ async function migrate() {
           ALTER TABLE users ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'member'
             CHECK (role IN ('admin', 'member'));
         END IF;
+
+        -- Add status column to users
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'users' AND column_name = 'status') THEN
+          ALTER TABLE users ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'active';
+        END IF;
+
+        -- Add status column to customers
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'customers' AND column_name = 'status') THEN
+          ALTER TABLE customers ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'active';
+        END IF;
+
+        -- Add status column to services
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'services' AND column_name = 'status') THEN
+          ALTER TABLE services ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'active';
+        END IF;
       END $$;
     `);
 
@@ -440,6 +458,9 @@ async function migrate() {
     client.release();
     await pool.end();
   }
+}
+
+migrate();
 }
 
 migrate();
