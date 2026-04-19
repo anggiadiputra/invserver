@@ -71,20 +71,17 @@ router.post('/validate-number', authMiddleware, async (req, res) => {
       });
     }
 
-    // Get user's Fonnte token from settings
-    const settingsResult = await pool.query(
-      'SELECT fonnte_token FROM company_settings WHERE user_id = $1',
-      [req.userId]
-    );
-
-    if (settingsResult.rows.length === 0 || !settingsResult.rows[0].fonnte_token) {
+    // Get global Fonnte token from system settings
+    const systemResult = await pool.query('SELECT fonnte_token FROM system_settings LIMIT 1');
+    
+    if (systemResult.rows.length === 0 || !systemResult.rows[0].fonnte_token) {
       return res.status(400).json({
         success: false,
-        message: 'Fonnte token not configured. Please add your token in Settings.',
+        message: 'Fonnte token not configured by administrator.',
       });
     }
 
-    const token = settingsResult.rows[0].fonnte_token;
+    const token = systemResult.rows[0].fonnte_token;
 
     console.log('Validating phone number:', target, 'by user:', req.userId);
 
@@ -117,20 +114,17 @@ router.post('/send', authMiddleware, async (req, res) => {
       });
     }
 
-    // Get user's Fonnte token from settings
-    const settingsResult = await pool.query(
-      'SELECT fonnte_token FROM company_settings WHERE user_id = $1',
-      [req.userId]
-    );
-
-    if (settingsResult.rows.length === 0 || !settingsResult.rows[0].fonnte_token) {
+    // Get global Fonnte token from system settings
+    const systemResult = await pool.query('SELECT fonnte_token FROM system_settings LIMIT 1');
+    
+    if (systemResult.rows.length === 0 || !systemResult.rows[0].fonnte_token) {
       return res.status(400).json({
         success: false,
-        message: 'Fonnte token not configured. Please add your token in Settings.',
+        message: 'Fonnte token not configured by administrator.',
       });
     }
 
-    const token = settingsResult.rows[0].fonnte_token;
+    const token = systemResult.rows[0].fonnte_token;
 
     console.log('Sending WhatsApp message to:', target, 'by user:', req.userId);
 
@@ -231,20 +225,17 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
       });
     }
 
-    // Get user's Fonnte token from settings
-    const settingsResult = await pool.query(
-      'SELECT fonnte_token FROM company_settings WHERE user_id = $1',
-      [req.userId]
-    );
-
-    if (settingsResult.rows.length === 0 || !settingsResult.rows[0].fonnte_token) {
+    // Get global Fonnte token from system settings
+    const systemResult = await pool.query('SELECT fonnte_token FROM system_settings LIMIT 1');
+    
+    if (systemResult.rows.length === 0 || !systemResult.rows[0].fonnte_token) {
       return res.status(400).json({
         success: false,
-        message: 'Fonnte token not configured. Please add your token in Settings.',
+        message: 'Fonnte token not configured by administrator.',
       });
     }
 
-    const token = settingsResult.rows[0].fonnte_token;
+    const token = systemResult.rows[0].fonnte_token;
 
     // Fetch invoice data
     const invoiceResult = await pool.query(

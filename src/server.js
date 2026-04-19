@@ -21,6 +21,7 @@ const PORT = process.env.PORT || 3001;
 const allowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
+  'https://app.diurusin.id',
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
@@ -31,7 +32,9 @@ app.use(cors({
     if (allowedOrigins.indexOf(origin) !== -1 || /^http:\/\/localhost:\d+$/.test(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      // Don't throw an error, just return false (no CORS headers)
+      // This prevents Express from catching an error and returning a 500
+      callback(null, false);
     }
   },
   credentials: true,

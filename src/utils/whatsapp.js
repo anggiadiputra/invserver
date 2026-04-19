@@ -30,15 +30,27 @@ export async function sendInvoiceWhatsApp(invoiceId, userId, baseUrl = 'http://l
 
     if (!customerPhone) return { success: false, message: 'Customer phone is empty' };
 
-    // 3. Fetch Company Settings
+    // 3. Fetch Global System Settings (Fonnte is now global)
+    const systemResult = await pool.query('SELECT * FROM system_settings LIMIT 1');
+    const systemSettings = systemResult.rows[0] || {};
+    const token = systemSettings.fonnte_token;
+
+    // Fetch Company Settings (for template and branding)
     const settingsResult = await pool.query(
-      'SELECT * FROM company_settings WHERE user_id = $1',
+      'SELECT company_name, company_phone, wa_invoice_template, wa_paid_template, wa_reminder_template FROM company_settings WHERE user_id = $1',
       [userId]
     );
     const company = settingsResult.rows[0] || {};
-    const token = company.fonnte_token;
 
     if (!token) return { success: false, message: 'WhatsApp token not configured' };
+
+    // Selection logic for templates (Priority: Company -> System)
+    let tpl = company.wa_invoice_template || systemSettings.wa_invoice_template;
+    if (invoice.status === 'paid') {
+      tpl = company.wa_paid_template || systemSettings.wa_paid_template || tpl;
+    } else if (invoice.status === 'overdue' || invoice.status === 'sent') {
+      tpl = company.wa_reminder_template || systemSettings.wa_reminder_template || tpl;
+    }
 
     // 4. Fetch Items
     const itemsResult = await pool.query(
@@ -51,12 +63,7 @@ export async function sendInvoiceWhatsApp(invoiceId, userId, baseUrl = 'http://l
     const formatRupiah = (amount) => `Rp${new Intl.NumberFormat('id-ID').format(Math.round(amount))}`;
     const formatDate = (date) => new Date(date).toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' });
 
-    let tpl = company.wa_invoice_template;
-    if (invoice.status === 'paid' && company.wa_paid_template) {
-      tpl = company.wa_paid_template;
-    } else if ((invoice.status === 'overdue' || invoice.status === 'sent') && company.wa_reminder_template) {
-      tpl = company.wa_reminder_template;
-    }
+    // Message selection is already handled above in the fallback selection
 
     let message = '';
     const publicUrl = `${baseUrl}/public/invoice/${invoice.invoice_number}`;

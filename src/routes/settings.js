@@ -32,12 +32,27 @@ router.get('/', authMiddleware, async (req, res) => {
     }
 
     // Merge: Global UI/Integrations + Per-User Company Info
-    // Note: app_name is strictly global to ensure platform branding consistency
-    const merged = {
-      ...systemSettings,
-      ...companyResult.rows[0],
-      app_name: systemSettings.app_name
-    };
+    // If a company field is null or empty string, fallback to system settings
+    const companySettings = companyResult.rows[0];
+    const merged = { ...systemSettings };
+
+    // Keys that can be overridden by user
+    const restorableKeys = [
+      'company_name', 'company_email', 'company_phone', 'company_address', 'company_logo',
+      'wa_invoice_template', 'wa_paid_template', 'wa_reminder_template',
+      'email_invoice_template', 'email_paid_template', 'email_reminder_template'
+    ];
+
+    for (const key of restorableKeys) {
+      if (companySettings[key] !== null && companySettings[key] !== undefined && companySettings[key] !== '') {
+        merged[key] = companySettings[key];
+      }
+    }
+
+    // Strict global settings (User cannot override)
+    merged.app_name = systemSettings.app_name || 'Invoizes';
+    merged.fonnte_token = systemSettings.fonnte_token;
+    merged.turnstile_site_key = systemSettings.turnstile_site_key;
 
     res.json(merged);
   } catch (error) {
@@ -61,10 +76,11 @@ router.put('/system', authMiddleware, adminOnly, async (req, res) => {
   try {
     const fields = [
       'app_name', 'primary_color', 'sidebar_color', 'company_logo',
-      'turnstile_site_key', 'turnstile_secret_key', 'fonnte_token',
+      'turnstile_site_key', 'turnstile_secret_key', 'fonnte_token', 'fonnte_test_target', 'fonnte_test_message',
       'wa_invoice_template', 'wa_paid_template', 'wa_reminder_template',
       's3_endpoint', 's3_bucket_name', 's3_region', 's3_access_key', 's3_secret_key', 's3_public_url',
-      'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from_email', 'smtp_from_name', 'smtp_encryption'
+      'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from_email', 'smtp_from_name', 'smtp_encryption',
+      'smtp_test_target', 'smtp_test_message'
     ];
 
     const updates = [];
@@ -287,23 +303,17 @@ router.post('/test-smtp', authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
-// Update company settings
+// Update company settings (User-specific)
 router.put('/', authMiddleware, async (req, res) => {
   try {
     const {
       company_name, company_email, company_phone, company_address, company_logo,
-      turnstile_site_key, turnstile_secret_key, fonnte_token, fonnte_test_target, 
       wa_invoice_template, wa_paid_template, wa_reminder_template,
       email_invoice_template, email_paid_template, email_reminder_template,
-      s3_endpoint, s3_bucket_name, s3_region, s3_access_key, s3_secret_key, s3_public_url,
-      smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from_email, smtp_from_name, smtp_encryption,
-      smtp_test_target,
-      bank_name, bank_account_name, bank_account_number,
-      app_name
-    } = req.body;
-    const { company_city, company_province, company_country, company_postal_code, company_mobile_phone, company_website,
+      company_city, company_province, company_country, company_postal_code, company_mobile_phone, company_website,
       province_id, regency_id, district_id, village_id,
-      province_name, regency_name, district_name, village_name } = req.body;
+      province_name, regency_name, district_name, village_name
+    } = req.body;
 
     // Check if settings exist
     const existing = await pool.query(
@@ -313,277 +323,58 @@ router.put('/', authMiddleware, async (req, res) => {
 
     let result;
     if (existing.rows.length === 0) {
-      // Create new settings
-      result = await pool.query(
-        `INSERT INTO company_settings (
-          user_id, company_name, company_email, company_phone, company_address,
-          company_logo, turnstile_site_key, turnstile_secret_key, fonnte_token, fonnte_test_target, 
-          wa_invoice_template, wa_paid_template, wa_reminder_template,
-          email_invoice_template, email_paid_template, email_reminder_template,
-          s3_endpoint, s3_bucket_name, s3_region, s3_access_key, s3_secret_key, s3_public_url,
-          smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from_email, smtp_from_name, smtp_encryption,
-          smtp_test_target,
-          bank_name, bank_account_name, bank_account_number,
-          province_name, regency_name, district_name, village_name
-        )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46)
-         RETURNING *`,
-        [
-          req.userId, company_name, company_email, company_phone, company_address,
-          company_logo, turnstile_site_key, turnstile_secret_key, fonnte_token, fonnte_test_target, 
-          wa_invoice_template, wa_paid_template, wa_reminder_template,
-          email_invoice_template, email_paid_template, email_reminder_template,
-          s3_endpoint, s3_bucket_name, s3_region, s3_access_key, s3_secret_key, s3_public_url,
-          smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from_email, smtp_from_name, smtp_encryption,
-          smtp_test_target,
-          bank_name, bank_account_name, bank_account_number,
-          province_name, regency_name, district_name, village_name
-        ]
-      );
+      // Create new settings (INSERT)
+      const insertFields = [
+        'user_id', 'company_name', 'company_email', 'company_phone', 'company_address', 'company_logo',
+        'wa_invoice_template', 'wa_paid_template', 'wa_reminder_template',
+        'email_invoice_template', 'email_paid_template', 'email_reminder_template',
+        'company_city', 'company_province', 'company_country', 'company_postal_code', 'company_mobile_phone', 'company_website',
+        'province_id', 'regency_id', 'district_id', 'village_id',
+        'province_name', 'regency_name', 'district_name', 'village_name'
+      ];
+
+      const placeholders = insertFields.map((_, i) => `$${i + 1}`).join(', ');
+      const values = [
+        req.userId, company_name, company_email, company_phone, company_address, company_logo,
+        wa_invoice_template, wa_paid_template, wa_reminder_template,
+        email_invoice_template, email_paid_template, email_reminder_template,
+        company_city, company_province, company_country, company_postal_code, company_mobile_phone, company_website,
+        province_id, regency_id, district_id, village_id,
+        province_name, regency_name, district_name, village_name
+      ];
+
+      const query = `INSERT INTO company_settings (${insertFields.join(', ')}) VALUES (${placeholders}) RETURNING *`;
+      result = await pool.query(query, values);
     } else {
       // Build dynamic UPDATE query for partial updates
       const updates = [];
       const values = [];
       let paramIndex = 1;
 
-      if (company_name !== undefined) {
-        updates.push(`company_name = $${paramIndex}`);
-        values.push(company_name);
-        paramIndex++;
+      // List of allowed fields for user-specific settings
+      const allowedFields = [
+        'company_name', 'company_email', 'company_phone', 'company_address', 'company_logo',
+        'wa_invoice_template', 'wa_paid_template', 'wa_reminder_template',
+        'email_invoice_template', 'email_paid_template', 'email_reminder_template',
+        'company_city', 'company_province', 'company_country', 'company_postal_code', 'company_mobile_phone', 'company_website',
+        'province_id', 'regency_id', 'district_id', 'village_id',
+        'province_name', 'regency_name', 'district_name', 'village_name'
+      ];
+
+      for (const field of allowedFields) {
+        if (req.body[field] !== undefined) {
+          updates.push(`${field} = $${paramIndex}`);
+          values.push(req.body[field]);
+          paramIndex++;
+        }
       }
-      if (company_email !== undefined) {
-        updates.push(`company_email = $${paramIndex}`);
-        values.push(company_email);
-        paramIndex++;
-      }
-      if (company_phone !== undefined) {
-        updates.push(`company_phone = $${paramIndex}`);
-        values.push(company_phone);
-        paramIndex++;
-      }
-      if (company_address !== undefined) {
-        updates.push(`company_address = $${paramIndex}`);
-        values.push(company_address);
-        paramIndex++;
-      }
-      if (company_logo !== undefined) {
-        updates.push(`company_logo = $${paramIndex}`);
-        values.push(company_logo);
-        paramIndex++;
-      }
-      if (turnstile_site_key !== undefined) {
-        updates.push(`turnstile_site_key = $${paramIndex}`);
-        values.push(turnstile_site_key);
-        paramIndex++;
-      }
-      if (turnstile_secret_key !== undefined) {
-        updates.push(`turnstile_secret_key = $${paramIndex}`);
-        values.push(turnstile_secret_key);
-        paramIndex++;
-      }
-      if (fonnte_token !== undefined) {
-        updates.push(`fonnte_token = $${paramIndex}`);
-        values.push(fonnte_token);
-        paramIndex++;
-      }
-      if (fonnte_test_target !== undefined) {
-        updates.push(`fonnte_test_target = $${paramIndex}`);
-        values.push(fonnte_test_target);
-        paramIndex++;
-      }
-      if (wa_invoice_template !== undefined) {
-        updates.push(`wa_invoice_template = $${paramIndex}`);
-        values.push(wa_invoice_template);
-        paramIndex++;
-      }
-      if (wa_paid_template !== undefined) {
-        updates.push(`wa_paid_template = $${paramIndex}`);
-        values.push(wa_paid_template);
-        paramIndex++;
-      }
-      if (wa_reminder_template !== undefined) {
-        updates.push(`wa_reminder_template = $${paramIndex}`);
-        values.push(wa_reminder_template);
-        paramIndex++;
-      }
-      if (email_invoice_template !== undefined) {
-        updates.push(`email_invoice_template = $${paramIndex}`);
-        values.push(email_invoice_template);
-        paramIndex++;
-      }
-      if (email_paid_template !== undefined) {
-        updates.push(`email_paid_template = $${paramIndex}`);
-        values.push(email_paid_template);
-        paramIndex++;
-      }
-      if (email_reminder_template !== undefined) {
-        updates.push(`email_reminder_template = $${paramIndex}`);
-        values.push(email_reminder_template);
-        paramIndex++;
-      }
-      if (s3_endpoint !== undefined) {
-        updates.push(`s3_endpoint = $${paramIndex}`);
-        values.push(s3_endpoint);
-        paramIndex++;
-      }
-      if (s3_bucket_name !== undefined) {
-        updates.push(`s3_bucket_name = $${paramIndex}`);
-        values.push(s3_bucket_name);
-        paramIndex++;
-      }
-      if (s3_region !== undefined) {
-        updates.push(`s3_region = $${paramIndex}`);
-        values.push(s3_region);
-        paramIndex++;
-      }
-      if (s3_access_key !== undefined) {
-        updates.push(`s3_access_key = $${paramIndex}`);
-        values.push(s3_access_key);
-        paramIndex++;
-      }
-      if (s3_secret_key !== undefined) {
-        updates.push(`s3_secret_key = $${paramIndex}`);
-        values.push(s3_secret_key);
-        paramIndex++;
-      }
-      if (s3_public_url !== undefined) {
-        updates.push(`s3_public_url = $${paramIndex}`);
-        values.push(s3_public_url);
-        paramIndex++;
-      }
-      if (smtp_host !== undefined) {
-        updates.push(`smtp_host = $${paramIndex}`);
-        values.push(smtp_host);
-        paramIndex++;
-      }
-      if (smtp_port !== undefined) {
-        updates.push(`smtp_port = $${paramIndex}`);
-        values.push(smtp_port);
-        paramIndex++;
-      }
-      if (smtp_user !== undefined) {
-        updates.push(`smtp_user = $${paramIndex}`);
-        values.push(smtp_user);
-        paramIndex++;
-      }
-      if (smtp_pass !== undefined) {
-        updates.push(`smtp_pass = $${paramIndex}`);
-        values.push(smtp_pass);
-        paramIndex++;
-      }
-      if (smtp_from_email !== undefined) {
-        updates.push(`smtp_from_email = $${paramIndex}`);
-        values.push(smtp_from_email);
-        paramIndex++;
-      }
-      if (smtp_from_name !== undefined) {
-        updates.push(`smtp_from_name = $${paramIndex}`);
-        values.push(smtp_from_name);
-        paramIndex++;
-      }
-      if (smtp_encryption !== undefined) {
-        updates.push(`smtp_encryption = $${paramIndex}`);
-        values.push(smtp_encryption);
-        paramIndex++;
-      }
-      if (smtp_test_target !== undefined) {
-        updates.push(`smtp_test_target = $${paramIndex}`);
-        values.push(smtp_test_target);
-        paramIndex++;
-      }
-      if (bank_name !== undefined) {
-        updates.push(`bank_name = $${paramIndex}`);
-        values.push(bank_name);
-        paramIndex++;
-      }
-      if (bank_account_name !== undefined) {
-        updates.push(`bank_account_name = $${paramIndex}`);
-        values.push(bank_account_name);
-        paramIndex++;
-      }
-      if (bank_account_number !== undefined) {
-        updates.push(`bank_account_number = $${paramIndex}`);
-        values.push(bank_account_number);
-        paramIndex++;
-      }
-      if (req.body.company_city !== undefined) {
-        updates.push(`company_city = $${paramIndex}`);
-        values.push(req.body.company_city);
-        paramIndex++;
-      }
-      if (req.body.company_province !== undefined) {
-        updates.push(`company_province = $${paramIndex}`);
-        values.push(req.body.company_province);
-        paramIndex++;
-      }
-      if (req.body.company_country !== undefined) {
-        updates.push(`company_country = $${paramIndex}`);
-        values.push(req.body.company_country);
-        paramIndex++;
-      }
-      if (req.body.company_postal_code !== undefined) {
-        updates.push(`company_postal_code = $${paramIndex}`);
-        values.push(req.body.company_postal_code);
-        paramIndex++;
-      }
-      if (req.body.company_mobile_phone !== undefined) {
-        updates.push(`company_mobile_phone = $${paramIndex}`);
-        values.push(req.body.company_mobile_phone);
-        paramIndex++;
-      }
-      if (req.body.company_website !== undefined) {
-        updates.push(`company_website = $${paramIndex}`);
-        values.push(req.body.company_website);
-        paramIndex++;
-      }
-      if (province_id !== undefined) {
-        updates.push(`province_id = $${paramIndex}`);
-        values.push(province_id);
-        paramIndex++;
-      }
-      if (regency_id !== undefined) {
-        updates.push(`regency_id = $${paramIndex}`);
-        values.push(regency_id);
-        paramIndex++;
-      }
-      if (district_id !== undefined) {
-        updates.push(`district_id = $${paramIndex}`);
-        values.push(district_id);
-        paramIndex++;
-      }
-      if (village_id !== undefined) {
-        updates.push(`village_id = $${paramIndex}`);
-        values.push(village_id);
-        paramIndex++;
-      }
-      if (province_name !== undefined) {
-        updates.push(`province_name = $${paramIndex}`);
-        values.push(province_name);
-        paramIndex++;
-      }
-      if (regency_name !== undefined) {
-        updates.push(`regency_name = $${paramIndex}`);
-        values.push(regency_name);
-        paramIndex++;
-      }
-      if (district_name !== undefined) {
-        updates.push(`district_name = $${paramIndex}`);
-        values.push(district_name);
-        paramIndex++;
-      }
-      if (village_name !== undefined) {
-        updates.push(`village_name = $${paramIndex}`);
-        values.push(village_name);
-        paramIndex++;
+
+      if (updates.length === 0) {
+        return res.status(400).json({ error: 'No fields to update' });
       }
 
       // Always update timestamp
       updates.push('updated_at = CURRENT_TIMESTAMP');
-
-      if (updates.length === 1) {
-        // Only timestamp was added, no fields to update
-        return res.status(400).json({ error: 'No fields to update' });
-      }
 
       // Add user_id as the last parameter
       values.push(req.userId);
@@ -601,10 +392,7 @@ router.put('/', authMiddleware, async (req, res) => {
 
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Error updating settings:', error.message);
-    console.error('Full error:', error);
-    console.error('Request body:', req.body);
-    console.error('User ID:', req.userId);
+    console.error('Error updating settings:', error);
     res.status(500).json({ error: 'Failed to update settings', details: error.message });
   }
 });

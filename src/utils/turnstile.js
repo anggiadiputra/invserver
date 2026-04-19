@@ -13,12 +13,14 @@ export async function verifyTurnstileToken(token) {
     const secretKey = result.rows[0]?.turnstile_secret_key;
 
     // 2. If no secret key is configured, skip verification (fails open/inactive)
-    if (!secretKey) {
+    // We check for null, undefined, empty string, or even literal 'null' string
+    if (!secretKey || secretKey.trim() === '' || secretKey === 'null') {
       return true;
     }
 
     // 3. If secret key is set but no token is provided, fail
     if (!token) {
+      console.warn('[Turnstile] Token missing but secret key is configured');
       throw new Error('Verification required. Please complete the CAPTCHA.');
     }
 

@@ -53,9 +53,6 @@ async function migrate() {
         company_phone VARCHAR(20),
         company_address TEXT,
         company_logo TEXT,
-        turnstile_site_key VARCHAR(255),
-        turnstile_secret_key VARCHAR(255),
-        fonnte_token VARCHAR(255),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(user_id)
@@ -214,18 +211,6 @@ async function migrate() {
 
     // Add fonnte_token column to company_settings if it doesn't exist
     await client.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'fonnte_token') THEN
-          ALTER TABLE company_settings ADD COLUMN fonnte_token VARCHAR(255);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'fonnte_test_target') THEN
-          ALTER TABLE company_settings ADD COLUMN fonnte_test_target VARCHAR(50);
-        END IF;
-        
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                       WHERE table_name = 'company_settings' AND column_name = 'wa_invoice_template') THEN
           ALTER TABLE company_settings ADD COLUMN wa_invoice_template TEXT;
@@ -258,72 +243,7 @@ async function migrate() {
       END $$;
     `);
 
-    // Add SMTP columns to company_settings if they don't exist
-    await client.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'smtp_host') THEN
-          ALTER TABLE company_settings ADD COLUMN smtp_host VARCHAR(255);
-        END IF;
 
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'smtp_port') THEN
-          ALTER TABLE company_settings ADD COLUMN smtp_port INTEGER DEFAULT 587;
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'smtp_user') THEN
-          ALTER TABLE company_settings ADD COLUMN smtp_user VARCHAR(255);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'smtp_pass') THEN
-          ALTER TABLE company_settings ADD COLUMN smtp_pass VARCHAR(255);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'smtp_from_email') THEN
-          ALTER TABLE company_settings ADD COLUMN smtp_from_email VARCHAR(255);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'smtp_from_name') THEN
-          ALTER TABLE company_settings ADD COLUMN smtp_from_name VARCHAR(255);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'smtp_encryption') THEN
-          ALTER TABLE company_settings ADD COLUMN smtp_encryption VARCHAR(10) DEFAULT 'tls';
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'smtp_test_target') THEN
-          ALTER TABLE company_settings ADD COLUMN smtp_test_target VARCHAR(255);
-        END IF;
-      END $$;
-    `);
-
-    // Add bank account columns to company_settings if they don't exist
-    await client.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'bank_name') THEN
-          ALTER TABLE company_settings ADD COLUMN bank_name VARCHAR(255);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'bank_account_name') THEN
-          ALTER TABLE company_settings ADD COLUMN bank_account_name VARCHAR(255);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'bank_account_number') THEN
-          ALTER TABLE company_settings ADD COLUMN bank_account_number VARCHAR(100);
-        END IF;
-      END $$;
-    `);
 
     // Add discount column to invoice_items if it doesn't exist
     await client.query(`
@@ -373,16 +293,6 @@ async function migrate() {
       WHERE expires_at IS NULL;
     `);
 
-    // Add appearance settings columns to company_settings
-    await client.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 'app_name') THEN
-          ALTER TABLE company_settings ADD COLUMN app_name VARCHAR(100) DEFAULT 'Invoizes';
-        END IF;
-      END $$;
-    `);
 
     // Create bank_accounts table for multiple bank accounts
     await client.query(`
@@ -402,41 +312,6 @@ async function migrate() {
       CREATE INDEX IF NOT EXISTS idx_bank_accounts_user_id ON bank_accounts(user_id);
     `);
 
-    // Add S3 compatible storage columns to company_settings if they don't exist
-    await client.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 's3_endpoint') THEN
-          ALTER TABLE company_settings ADD COLUMN s3_endpoint VARCHAR(255);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 's3_bucket_name') THEN
-          ALTER TABLE company_settings ADD COLUMN s3_bucket_name VARCHAR(255);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 's3_region') THEN
-          ALTER TABLE company_settings ADD COLUMN s3_region VARCHAR(100);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 's3_access_key') THEN
-          ALTER TABLE company_settings ADD COLUMN s3_access_key VARCHAR(255);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 's3_secret_key') THEN
-          ALTER TABLE company_settings ADD COLUMN s3_secret_key VARCHAR(255);
-        END IF;
-
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'company_settings' AND column_name = 's3_public_url') THEN
-          ALTER TABLE company_settings ADD COLUMN s3_public_url VARCHAR(255);
-        END IF;
-      END $$;
-    `);
 
     // Create whatsapp_logs table for tracking sent messages
     await client.query(`
