@@ -365,7 +365,7 @@ async function migrate() {
     await client.query(`
       CREATE TABLE IF NOT EXISTS system_settings (
         id SERIAL PRIMARY KEY,
-        app_name VARCHAR(100) DEFAULT 'Invoizes',
+        app_name VARCHAR(100) DEFAULT 'Invoizes - Pro Billing System',
         company_logo TEXT,
         turnstile_site_key TEXT,
         turnstile_secret_key TEXT,
@@ -458,9 +458,6 @@ async function migrate() {
     client.release();
     await pool.end();
   }
-}
-
-migrate();
 }
 
 migrate();
