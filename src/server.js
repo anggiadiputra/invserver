@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import express from 'express';
 import cors from 'cors';
+import { inject } from '@vercel/analytics';
 import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customers.js';
 import serviceRoutes from './routes/services.js';
@@ -13,6 +14,9 @@ import fonnteRoutes from './routes/fonnte.js';
 import emailRoutes from './routes/emails.js';
 import publicRoutes from './routes/public.js';
 import userRoutes from './routes/users.js';
+
+// Initialize Vercel Analytics
+inject();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
