@@ -10,7 +10,9 @@ import { verifyTurnstileToken } from '../utils/turnstile.js';
 const router = express.Router();
 
 // Validation middleware
-const validateEmail = body('email').isEmail().normalizeEmail();
+// IMPORTANT: gmail_remove_dots: false prevents 'user.name@gmail.com' → 'username@gmail.com'
+// which would cause login to fail because the dot-version is stored in DB.
+const validateEmail = body('email').isEmail().normalizeEmail({ gmail_remove_dots: false });
 const validatePassword = body('password').isLength({ min: 6 }).trim();
 const validateName = [
   body('firstName').trim().notEmpty(),
@@ -59,11 +61,29 @@ router.post('/register',
 
       const user = result.rows[0];
 
-      // Ensure user has a company_settings record (to prevent fetch errors on Settings page)
+      // Ensure user has a company_settings record
       await pool.query(
         'INSERT INTO company_settings (user_id, company_name, company_email) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING',
         [user.id, companyName || `${firstName}'s Company`, email]
       );
+
+      // --- SAAS ONBOARDING ---
+      // 1. Get Free Plan ID
+      const freePlanResult = await pool.query("SELECT id FROM plans WHERE slug = 'free'");
+      const freePlanId = freePlanResult.rows[0].id;
+
+      // 2. Create 'free' subscription
+      await pool.query(
+        'INSERT INTO subscriptions (user_id, plan_id, status) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING',
+        [user.id, freePlanId, 'active']
+      );
+
+      // 3. Create wallet with 0 balance
+      await pool.query(
+        'INSERT INTO user_wallets (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING',
+        [user.id]
+      );
+      // -----------------------
       const token = generateToken(user.id);
 
       res.cookie('token', token, {
@@ -123,6 +143,14 @@ router.post('/login',
 
       const user = result.rows[0];
 
+      // If user has no password (registered via Neon Auth / SSO only)
+      // they must use Neon Auth to sign in, not the legacy email/password form.
+      if (!user.password_hash) {
+        return res.status(401).json({ 
+          error: 'Akun ini terdaftar melalui Neon Auth. Silakan login menggunakan tombol SSO atau gunakan fitur "Forgot Password" untuk mengatur password.' 
+        });
+      }
+
       // Verify password
       const isValidPassword = await bcrypt.compare(password, user.password_hash);
 
@@ -157,27 +185,62 @@ router.post('/login',
   }
 );
 
-// Get current user profile
+// Get current user profile (with Wallet and Subscription info)
 router.get('/me', authMiddleware, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT id, email, first_name, last_name, role, neon_user_id FROM users WHERE id = $1',
-      [req.userId]
-    );
+    const result = await pool.query(`
+      SELECT 
+        u.id, u.email, u.first_name, u.last_name, u.role, u.neon_user_id,
+        w.balance as wallet_balance,
+        s.id as subscription_id,
+        s.status as subscription_status,
+        s.expires_at as subscription_expires_at,
+        p.name as plan_name,
+        p.slug as plan_slug,
+        p.price_monthly as plan_price
+      FROM users u
+      LEFT JOIN user_wallets w ON u.id = w.user_id
+      LEFT JOIN subscriptions s ON u.id = s.user_id
+      LEFT JOIN plans p ON s.plan_id = p.id
+      WHERE u.id = $1
+    `, [req.userId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const user = result.rows[0];
+    const row = result.rows[0];
+    const isAdmin = row.role === 'admin';
+
     res.json({
       user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        role: user.role,
-        neon_user_id: user.neon_user_id,
+        id: row.id,
+        email: row.email,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        role: row.role,
+        neon_user_id: row.neon_user_id,
+        wallet: {
+          balance: isAdmin ? 'Unlimited' : (row.wallet_balance || 0)
+        },
+        subscription: isAdmin ? {
+          status: 'active',
+          expires_at: null,
+          plan: {
+            name: 'System Admin',
+            slug: 'admin',
+            price: 0
+          }
+        } : {
+          id: row.subscription_id,
+          status: row.subscription_status,
+          expires_at: row.subscription_expires_at,
+          plan: {
+            name: row.plan_name,
+            slug: row.plan_slug,
+            price: row.plan_price
+          }
+        }
       }
     });
   } catch (error) {
@@ -311,5 +374,91 @@ router.post('/logout', (req, res) => {
 router.post('/sync-neon', authMiddleware, (req, res) => {
   res.json({ success: true, message: 'Identity synced successfully', userId: req.userId });
 });
+
+/**
+ * POST /api/auth/neon-pre-register
+ * Called right after authClient.signUp.email() succeeds on the frontend.
+ * Creates a local user record with a password hash so the user can also login
+ * via email/password after their Neon Auth session expires.
+ * 
+ * Security: This endpoint does NOT require Turnstile because it's called immediately
+ * after a Turnstile-verified Neon Auth signup. Rate limiting should be used in production.
+ */
+router.post('/neon-pre-register',
+  body('email').isEmail().normalizeEmail({ gmail_remove_dots: false }),
+  body('password').isLength({ min: 6 }).trim(),
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { email, password, firstName, lastName, companyName } = req.body;
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // Check if user already exists (created by JIT provisioning or previous attempt)
+      const existing = await pool.query(
+        'SELECT id, password_hash FROM users WHERE LOWER(email) = LOWER($1)',
+        [email]
+      );
+
+      if (existing.rows.length > 0) {
+        // User already exists (from JIT or other). Update password if not set.
+        const existingUser = existing.rows[0];
+        if (!existingUser.password_hash) {
+          await pool.query(
+            'UPDATE users SET password_hash = $1, first_name = COALESCE(first_name, $2), last_name = COALESCE(last_name, $3), updated_at = CURRENT_TIMESTAMP WHERE id = $4',
+            [hashedPassword, firstName || '', lastName || '', existingUser.id]
+          );
+        }
+        return res.json({ success: true, message: 'Local account updated.' });
+      }
+
+      // Create new local user
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        const insertRes = await client.query(
+          `INSERT INTO users (email, password_hash, first_name, last_name, company_name, role)
+           VALUES (LOWER($1), $2, $3, $4, $5, 'member') RETURNING id`,
+          [email, hashedPassword, firstName || '', lastName || '', companyName || null]
+        );
+        const userId = insertRes.rows[0].id;
+
+        await client.query(
+          'INSERT INTO company_settings (user_id, company_name, company_email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [userId, companyName || `${firstName}'s Company`, email]
+        );
+
+        const freePlan = await client.query("SELECT id FROM plans WHERE slug = 'free'");
+        if (freePlan.rows.length > 0) {
+          await client.query(
+            'INSERT INTO subscriptions (user_id, plan_id, status) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+            [userId, freePlan.rows[0].id, 'active']
+          );
+        }
+
+        await client.query(
+          'INSERT INTO user_wallets (user_id, balance) VALUES ($1, 0) ON CONFLICT DO NOTHING',
+          [userId]
+        );
+
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Local account pre-created.', userId });
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Neon pre-register error:', error);
+      // Non-fatal: Neon Auth signup succeeded, local provision might retry via JIT
+      res.status(500).json({ error: 'Failed to create local account, but Neon Auth registration succeeded.' });
+    }
+  }
+);
 
 export default router;

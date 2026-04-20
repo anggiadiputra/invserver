@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import pool from '../db/pool.js';
+import crypto from 'node:crypto';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 const NEON_JWKS_URL = process.env.NEON_JWKS_URL || '';
@@ -47,8 +48,22 @@ function base64UrlToBuffer(b64url) {
   return Uint8Array.from(bin, (c) => c.charCodeAt(0)).buffer;
 }
 
-async function importRsaPublicKey(jwk) {
-  return crypto.subtle.importKey(
+async function importPublicKey(jwk) {
+  const subtle = crypto.subtle || (crypto.webcrypto && crypto.webcrypto.subtle);
+  if (!subtle) throw new Error('WebCrypto subtle is not available in this environment');
+
+  if (jwk.kty === 'OKP' && jwk.crv === 'Ed25519') {
+    return subtle.importKey(
+      'jwk',
+      jwk,
+      { name: 'Ed25519' },
+      true,
+      ['verify']
+    );
+  }
+
+  // Default to RSA if kty is RSA or not specified
+  return subtle.importKey(
     'jwk',
     jwk,
     { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
@@ -58,42 +73,68 @@ async function importRsaPublicKey(jwk) {
 }
 
 async function verifyNeonJWT(token) {
-  const keys = await getJwks();
-  if (!keys || keys.length === 0) return null;
-
-  // Decode header without verifying to find kid
-  const [headerB64] = token.split('.');
-  let header;
   try {
-    header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8'));
-  } catch {
-    return null;
-  }
+    const keys = await getJwks();
+    if (!keys || keys.length === 0) {
+      await audit('NEON VERIFY FAIL', { reason: 'JWKS keys empty or unreachable' });
+      return null;
+    }
 
-  // Find matching key
-  const jwk = header.kid ? keys.find((k) => k.kid === header.kid) : keys[0];
-  if (!jwk) return null;
+    // Decode header without verifying to find kid
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      await audit('NEON VERIFY FAIL', { reason: 'Invalid token format (not 3 parts)' });
+      return null;
+    }
 
-  try {
-    // Split token
-    const [hdr, payload, sigB64] = token.split('.');
-    const signingInput = `${hdr}.${payload}`;
+    const [headerB64, payloadB64, sigB64] = parts;
+    let header;
+    try {
+      header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8'));
+    } catch (e) {
+      await audit('NEON VERIFY FAIL', { reason: 'Failed to parse header', error: e.message });
+      return null;
+    }
+
+    // Find matching key
+    const jwk = header.kid ? keys.find((k) => k.kid === header.kid) : keys[0];
+    if (!jwk) {
+      await audit('NEON VERIFY FAIL', { reason: 'No matching JWK found for kid', kid: header.kid });
+      return null;
+    }
+
+    // Verify signature
+    const signingInput = `${headerB64}.${payloadB64}`;
     const signature = base64UrlToBuffer(sigB64);
 
-    // Import public key and verify signature
-    const publicKey = await importRsaPublicKey(jwk);
+    const publicKey = await importPublicKey(jwk);
+    const subtle = crypto.subtle || (crypto.webcrypto && crypto.webcrypto.subtle);
     const data = new TextEncoder().encode(signingInput);
-    const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', publicKey, signature, data);
-    if (!valid) return null;
+    
+    // Determine verify algorithm based on JWK or Header
+    const verifyAlgorithm = (jwk.kty === 'OKP' || header.alg === 'EdDSA') 
+      ? { name: 'Ed25519' } 
+      : 'RSASSA-PKCS1-v1_5';
+
+    const valid = await subtle.verify(verifyAlgorithm, publicKey, signature, data);
+    if (!valid) {
+      await audit('NEON VERIFY FAIL', { reason: 'Signature invalid', alg: header.alg });
+      return null;
+    }
 
     // Decode payload
-    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    const decoded = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
 
     // Check expiry
-    if (decoded.exp && Date.now() / 1000 > decoded.exp) return null;
+    if (decoded.exp && Date.now() / 1000 > decoded.exp) {
+      await audit('NEON VERIFY FAIL', { reason: 'Token expired', exp: decoded.exp });
+      return null;
+    }
 
     return decoded;
-  } catch {
+  } catch (error) {
+    console.error('verifyNeonJWT internal error:', error);
+    await audit('NEON VERIFY ERROR', { error: error.message });
     return null;
   }
 }
@@ -154,53 +195,108 @@ export async function authMiddleware(req, res, next) {
     const neonDecoded = await verifyNeonJWT(token);
     if (neonDecoded) {
       const neonId = neonDecoded.sub;
-      const emailRaw = neonDecoded.email || neonDecoded.email_address;
+      // Extract email from common fields in BetterAuth/Neon/standard OIDC tokens
+      const emailRaw = neonDecoded.email || 
+                       neonDecoded.email_address || 
+                       (neonDecoded.user && neonDecoded.user.email);
+      
       const email = emailRaw ? emailRaw.toLowerCase() : null;
+
+      if (!email) {
+        await audit('NEON EMAIL MISSING', { payloadStart: JSON.stringify(neonDecoded).substring(0, 100) });
+      }
 
       try {
         // 1. Precise lookup by neon_user_id
         let dbRes = await pool.query(
-          'SELECT id FROM users WHERE neon_user_id = $1',
+          'SELECT id, role FROM users WHERE neon_user_id = $1',
           [neonId]
         );
 
         // 2. If not found, try robust lookup by LOWER(email)
         if (dbRes.rows.length === 0 && email) {
           dbRes = await pool.query(
-            'SELECT id FROM users WHERE LOWER(email) = LOWER($1)',
+            'SELECT id, role FROM users WHERE LOWER(email) = LOWER($1)',
             [email]
           );
           
           if (dbRes.rows.length > 0) {
+            const existingUser = dbRes.rows[0];
+            
+            // SECURITY FIX: Prohibit linking to existing 'admin' accounts
+            if (existingUser.role === 'admin') {
+              await audit('SECURITY LINK BLOCKED', { email, neonId, reason: 'Target user is admin' });
+              return res.status(403).json({ error: 'Email ini terdaftar sebagai Admin. Sinkronisasi identitas otomatis diblokir untuk keamanan.' });
+            }
+
             await pool.query(
               'UPDATE users SET neon_user_id = $1 WHERE id = $2',
-              [neonId, dbRes.rows[0].id]
+              [neonId, existingUser.id]
             );
-            await audit('NEON LINKED', { email, neonId, userId: dbRes.rows[0].id });
+            await audit('NEON LINKED', { email, neonId, userId: existingUser.id });
           }
         }
 
-        // 3. If STILL not found, create a new user
+        // 3. If STILL not found, create a new user with FULL PROFILE
         if (dbRes.rows.length === 0 && email) {
-          const name = neonDecoded.name || email.split('@')[0];
-          const [firstName, ...rest] = name.split(' ');
-          
-          dbRes = await pool.query(
-            `INSERT INTO users (email, neon_user_id, first_name, last_name)
-             VALUES (LOWER($1), $2, $3, $4)
-             RETURNING id`,
-            [email, neonId, firstName, rest.join(' ') || '']
-          );
-          await audit('NEON CREATED', { email, neonId, userId: dbRes.rows[0].id });
+          const client = await pool.connect();
+          try {
+            await client.query('BEGIN');
+            
+            const name = neonDecoded.name || email.split('@')[0];
+            const [firstName, ...rest] = name.split(' ');
+            
+            // a. Create User
+            const insertRes = await client.query(
+              `INSERT INTO users (email, neon_user_id, first_name, last_name, role)
+               VALUES (LOWER($1), $2, $3, $4, 'member')
+               RETURNING id, role`,
+              [email, neonId, firstName, rest.join(' ') || '']
+            );
+            const newUser = insertRes.rows[0];
+
+            // b. Create Company Settings
+            await client.query(
+              'INSERT INTO company_settings (user_id, company_name, company_email) VALUES ($1, $2, $3)',
+              [newUser.id, `${firstName}'s Company`, email]
+            );
+
+            // c. Create Free Subscription
+            const freePlan = await client.query("SELECT id FROM plans WHERE slug = 'free'");
+            if (freePlan.rows.length > 0) {
+              await client.query(
+                'INSERT INTO subscriptions (user_id, plan_id, status) VALUES ($1, $2, $3)',
+                [newUser.id, freePlan.rows[0].id, 'active']
+              );
+            }
+
+            // d. Create Wallet
+            await client.query(
+              'INSERT INTO user_wallets (user_id, balance) VALUES ($1, 0)',
+              [newUser.id]
+            );
+
+            await client.query('COMMIT');
+            dbRes = insertRes;
+            await audit('NEON CREATED FULL', { email, neonId, userId: newUser.id });
+          } catch (e) {
+            await client.query('ROLLBACK');
+            throw e;
+          } finally {
+            client.release();
+          }
         }
 
         if (dbRes.rows.length > 0) {
           req.userId = dbRes.rows[0].id;
+          req.userRole = dbRes.rows[0].role; // Ensure role is set
+          await audit('AUTH PATH A SUCCESS', { email, neonId, userId: req.userId });
           return next();
         } else {
           await audit('NEON NO USER', { email, neonId });
         }
       } catch (e) {
+        console.error('Neon sync error:', e);
         await audit('NEON DB ERROR', { email, error: e.message });
       }
     } else {
@@ -218,6 +314,7 @@ export async function authMiddleware(req, res, next) {
       if (userResult.rows.length > 0) {
         req.userId = userId;
         req.userRole = userResult.rows[0].role;
+        await audit('AUTH PATH B SUCCESS', { userId: req.userId });
         return next();
       } else {
         await audit('LEGACY USER MISSING', { userId });

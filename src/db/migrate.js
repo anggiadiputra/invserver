@@ -209,8 +209,10 @@ async function migrate() {
       END $$;
     `);
 
-    // Add fonnte_token column to company_settings if it doesn't exist
+    // Add templates columns to company_settings if they don't exist
     await client.query(`
+      DO $$ 
+      BEGIN
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                       WHERE table_name = 'company_settings' AND column_name = 'wa_invoice_template') THEN
           ALTER TABLE company_settings ADD COLUMN wa_invoice_template TEXT;
@@ -358,6 +360,7 @@ async function migrate() {
                       WHERE table_name = 'services' AND column_name = 'status') THEN
           ALTER TABLE services ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'active';
         END IF;
+
       END $$;
     `);
 
@@ -395,6 +398,65 @@ async function migrate() {
     if (parseInt(systemRes.rows[0].count) === 0) {
       await client.query('INSERT INTO system_settings DEFAULT VALUES');
       console.log('✅ Seeded default system_settings');
+    }
+
+    // --- SAAS TABLES (Restored) ---
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS plans (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        slug VARCHAR(50) UNIQUE NOT NULL,
+        price_monthly DECIMAL(10,2) DEFAULT 0,
+        max_invoices INT DEFAULT 10,
+        max_customers INT DEFAULT 50,
+        features JSONB DEFAULT '{}',
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        plan_id INTEGER NOT NULL REFERENCES plans(id),
+        status VARCHAR(20) DEFAULT 'trial',
+        started_at TIMESTAMP DEFAULT NOW(),
+        expires_at TIMESTAMP,
+        cancelled_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS user_wallets (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        balance DECIMAL(12,2) DEFAULT 0,
+        total_deposited DECIMAL(12,2) DEFAULT 0,
+        total_spent DECIMAL(12,2) DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS wallet_transactions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        type VARCHAR(20) NOT NULL,
+        amount DECIMAL(12,2) NOT NULL,
+        balance_after DECIMAL(12,2) NOT NULL,
+        description TEXT,
+        pakasir_order_id VARCHAR(100),
+        status VARCHAR(20) DEFAULT 'completed',
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // Seed initial plans if empty
+    const plansCount = await client.query('SELECT COUNT(*) FROM plans');
+    if (parseInt(plansCount.rows[0].count) === 0) {
+      await client.query(`
+        INSERT INTO plans (name, slug, price_monthly, max_invoices, max_customers, features) VALUES
+          ('Gratis',  'free',    0,      10,  50,  '{"email": false, "whatsapp": false}'),
+          ('Starter', 'starter', 49000,  100, 500, '{"email": true,  "whatsapp": false}'),
+          ('Pro',     'pro',     149000, -1,  -1,  '{"email": true,  "whatsapp": true}')
+      `);
+      console.log('✅ Seeded default plans');
     }
 
     // --- DATA NORMALIZATION & IDENTITY MERGING (formerly in server.js) ---

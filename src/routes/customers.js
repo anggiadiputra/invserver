@@ -1,6 +1,7 @@
 import express from 'express';
 import pool from '../db/pool.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { checkCustomerQuota } from '../middleware/checkQuota.js';
 
 const router = express.Router();
 
@@ -83,7 +84,7 @@ router.post('/batch-delete', authMiddleware, async (req, res) => {
 });
 
 // Create customer
-router.post('/', authMiddleware, async (req, res) => {
+router.post('/', authMiddleware, checkCustomerQuota, async (req, res) => {
   try {
     const {
       name, email, phone, address, city, postal_code, country,

@@ -13,6 +13,10 @@ import fonnteRoutes from './routes/fonnte.js';
 import emailRoutes from './routes/emails.js';
 import publicRoutes from './routes/public.js';
 import userRoutes from './routes/users.js';
+import walletRoutes from './routes/wallet.js';
+import webhookRoutes from './routes/webhooks.js';
+import plansRoutes from './routes/plans.js';
+import { initBillingJob } from './jobs/billing.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -57,6 +61,12 @@ app.use('/api/fonnte', fonnteRoutes);
 app.use('/api/emails', emailRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/wallet', walletRoutes);
+app.use('/api/webhooks', webhookRoutes);
+app.use('/api/plans', plansRoutes);
+
+// Start billing job
+initBillingJob();
 
 // Public invoice redirect (redirect backend links to frontend)
 app.get('/public/invoice/:id', (req, res) => {

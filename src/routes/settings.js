@@ -80,7 +80,8 @@ router.put('/system', authMiddleware, adminOnly, async (req, res) => {
       'wa_invoice_template', 'wa_paid_template', 'wa_reminder_template',
       's3_endpoint', 's3_bucket_name', 's3_region', 's3_access_key', 's3_secret_key', 's3_public_url',
       'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from_email', 'smtp_from_name', 'smtp_encryption',
-      'smtp_test_target', 'smtp_test_message'
+      'smtp_test_target', 'smtp_test_message',
+      'pakasir_slug', 'pakasir_api_key', 'pakasir_is_sandbox'
     ];
 
     const updates = [];

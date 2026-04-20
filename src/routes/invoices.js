@@ -1,6 +1,7 @@
 import express from 'express';
 import pool from '../db/pool.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { checkInvoiceQuota } from '../middleware/checkQuota.js';
 import { sendInvoiceNotifications } from '../utils/notifications.js';
 import { calculateInvoiceTotals } from '../utils/calculations.js';
 
@@ -110,7 +111,7 @@ router.get('/stats/monthly', authMiddleware, async (req, res) => {
 });
 
 // Create invoice
-router.post('/', authMiddleware, async (req, res) => {
+router.post('/', authMiddleware, checkInvoiceQuota, async (req, res) => {
   try {
     const { customer_id, invoice_number, issue_date, due_date, items, notes, show_discount, show_unit, show_tax } = req.body;
 
