@@ -79,6 +79,7 @@ async function migrate() {
         regency_name VARCHAR(100),
         district_name VARCHAR(100),
         village_name VARCHAR(100),
+        is_self BOOLEAN DEFAULT false,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -111,6 +112,8 @@ async function migrate() {
         tax_amount DECIMAL(12, 2) DEFAULT 0,
         paid_amount DECIMAL(12, 2) DEFAULT 0,
         status VARCHAR(50) DEFAULT 'draft',
+        invoice_type VARCHAR(20) DEFAULT 'regular',
+        system_ref_id VARCHAR(100),
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -282,9 +285,39 @@ async function migrate() {
           ALTER TABLE invoices ADD COLUMN show_tax BOOLEAN DEFAULT false;
         END IF;
 
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'plans' AND column_name = 'description') THEN
+          ALTER TABLE plans ADD COLUMN description TEXT;
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'plans' AND column_name = 'updated_at') THEN
+          ALTER TABLE plans ADD COLUMN updated_at TIMESTAMP DEFAULT NOW();
+        END IF;
+
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                       WHERE table_name = 'invoices' AND column_name = 'expires_at') THEN
           ALTER TABLE invoices ADD COLUMN expires_at TIMESTAMP;
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'customers' AND column_name = 'is_self') THEN
+          ALTER TABLE customers ADD COLUMN is_self BOOLEAN DEFAULT false;
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'invoices' AND column_name = 'invoice_type') THEN
+          ALTER TABLE invoices ADD COLUMN invoice_type VARCHAR(20) DEFAULT 'regular';
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'invoices' AND column_name = 'system_ref_id') THEN
+          ALTER TABLE invoices ADD COLUMN system_ref_id VARCHAR(100);
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'wallet_transactions' AND column_name = 'invoice_id') THEN
+          ALTER TABLE wallet_transactions ADD COLUMN invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL;
         END IF;
       END $$;
     `);
@@ -407,11 +440,13 @@ async function migrate() {
         name VARCHAR(100) NOT NULL,
         slug VARCHAR(50) UNIQUE NOT NULL,
         price_monthly DECIMAL(10,2) DEFAULT 0,
+        description TEXT,
         max_invoices INT DEFAULT 10,
         max_customers INT DEFAULT 50,
         features JSONB DEFAULT '{}',
         is_active BOOLEAN DEFAULT true,
-        created_at TIMESTAMP DEFAULT NOW()
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
       );
 
       CREATE TABLE IF NOT EXISTS subscriptions (
@@ -442,19 +477,23 @@ async function migrate() {
         balance_after DECIMAL(12,2) NOT NULL,
         description TEXT,
         pakasir_order_id VARCHAR(100),
+        invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
         status VARCHAR(20) DEFAULT 'completed',
         created_at TIMESTAMP DEFAULT NOW()
       );
+
+      -- Ensure description column exists in plans (for existing tables)
+      ALTER TABLE plans ADD COLUMN IF NOT EXISTS description TEXT;
     `);
 
     // Seed initial plans if empty
     const plansCount = await client.query('SELECT COUNT(*) FROM plans');
     if (parseInt(plansCount.rows[0].count) === 0) {
       await client.query(`
-        INSERT INTO plans (name, slug, price_monthly, max_invoices, max_customers, features) VALUES
-          ('Gratis',  'free',    0,      10,  50,  '{"email": false, "whatsapp": false}'),
-          ('Starter', 'starter', 49000,  100, 500, '{"email": true,  "whatsapp": false}'),
-          ('Pro',     'pro',     149000, -1,  -1,  '{"email": true,  "whatsapp": true}')
+        INSERT INTO plans (name, slug, description, price_monthly, max_invoices, max_customers, features) VALUES
+          ('Gratis',  'free',    'Cocok untuk personal dan UMKM kecil', 0,      10,  50,  '{"email": false, "whatsapp": false}'),
+          ('Starter', 'starter', 'Untuk bisnis berkembang', 49000,  100, 500, '{"email": true,  "whatsapp": false}'),
+          ('Pro',     'pro',     'Fitur lengkap untuk bisnis profesional', 149000, -1,  -1,  '{"email": true,  "whatsapp": true}')
       `);
       console.log('✅ Seeded default plans');
     }

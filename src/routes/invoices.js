@@ -12,7 +12,7 @@ router.get('/', authMiddleware, async (req, res) => {
   try {
     const { page, limit, status, search } = req.query;
 
-    const conditions = ['i.user_id = $1'];
+    const conditions = ["i.user_id = $1", "i.invoice_type = 'regular'"];
     const params = [req.userId];
     let paramIdx = 2;
 
@@ -78,7 +78,7 @@ router.get('/stats/summary', authMiddleware, async (req, res) => {
         COALESCE(SUM(CASE WHEN status = 'paid' THEN (total_amount + COALESCE(tax_amount, 0)) ELSE 0 END), 0) as total_paid,
         COALESCE(SUM(CASE WHEN status != 'paid' THEN (total_amount + COALESCE(tax_amount, 0)) ELSE 0 END), 0) as total_pending
        FROM invoices 
-       WHERE user_id = $1`,
+       WHERE user_id = $1 AND invoice_type = 'regular' `,
       [req.userId]
     );
     res.json(result.rows[0]);
@@ -98,6 +98,7 @@ router.get('/stats/monthly', authMiddleware, async (req, res) => {
         COALESCE(SUM(CASE WHEN status != 'paid' THEN (total_amount + COALESCE(tax_amount, 0)) ELSE 0 END), 0) as unpaid_amount
        FROM invoices 
        WHERE user_id = $1 
+         AND invoice_type = 'regular'
          AND issue_date >= CURRENT_DATE - INTERVAL '6 months'
        GROUP BY TO_CHAR(issue_date, 'Mon'), DATE_TRUNC('month', issue_date)
        ORDER BY DATE_TRUNC('month', issue_date) ASC`,

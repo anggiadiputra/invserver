@@ -87,9 +87,9 @@ export class WalletService {
 
       // 3. Log transaction
       await client.query(`
-        INSERT INTO wallet_transactions (user_id, type, amount, balance_after, description, status)
-        VALUES ($1, 'deduction', $2, $3, $4, 'completed')
-      `, [userId, -amount, newBalance, description]);
+        INSERT INTO wallet_transactions (user_id, type, amount, balance_after, description, pakasir_order_id, status)
+        VALUES ($1, 'deduction', $2, $3, $4, $5, 'completed')
+      `, [userId, -amount, newBalance, description, referenceId]);
 
       await client.query('COMMIT');
       console.log(`[Wallet] Deducted ${amount} from User ${userId}. New balance: ${newBalance}`);
