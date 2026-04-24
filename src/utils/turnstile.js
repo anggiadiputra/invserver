@@ -7,6 +7,11 @@ import pool from '../db/pool.js';
  * @throws {Error} - If verification fails
  */
 export async function verifyTurnstileToken(token) {
+  // 0. Check for bypass in local environment
+  if (process.env.SKIP_TURNSTILE === 'true') {
+    return true;
+  }
+
   try {
     // 1. Get the secret key from system_settings
     const result = await pool.query('SELECT turnstile_secret_key FROM system_settings LIMIT 1');

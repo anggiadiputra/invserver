@@ -144,6 +144,11 @@ router.get('/settings', async (req, res) => {
     );
     const systemSettings = systemResult.rows[0] || { app_name: 'Invoizes' };
 
+    // If Turnstile is disabled locally via .env, hide the site key from frontend
+    if (process.env.SKIP_TURNSTILE === 'true') {
+      systemSettings.turnstile_site_key = null;
+    }
+
     // Get basic company info (fallback for public view)
     const companyResult = await pool.query(
       'SELECT company_name, company_email, company_phone, company_address FROM company_settings LIMIT 1'
