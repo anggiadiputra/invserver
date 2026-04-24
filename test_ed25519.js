@@ -1,27 +1,17 @@
-
 import crypto from 'node:crypto';
 // fetch is global in Node.js 18+
 
-const NEON_JWKS_URL = 'https://ep-square-lake-a1ky6q1k.neonauth.ap-southeast-1.aws.neon.tech/neondb/auth/.well-known/jwks.json';
+const NEON_JWKS_URL =
+  'https://ep-square-lake-a1ky6q1k.neonauth.ap-southeast-1.aws.neon.tech/neondb/auth/.well-known/jwks.json';
 
 async function importPublicKey(jwk) {
   const subtle = crypto.webcrypto.subtle;
   if (jwk.kty === 'OKP' && jwk.crv === 'Ed25519') {
-    return subtle.importKey(
-      'jwk',
-      jwk,
-      { name: 'Ed25519' },
-      true,
-      ['verify']
-    );
+    return subtle.importKey('jwk', jwk, { name: 'Ed25519' }, true, ['verify']);
   }
-  return subtle.importKey(
-    'jwk',
-    jwk,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    true,
-    ['verify']
-  );
+  return subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, true, [
+    'verify',
+  ]);
 }
 
 async function test() {

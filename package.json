@@ -11,7 +11,10 @@
     "cleanup": "node src/utils/cleanupDuplicates.js",
     "promote": "node src/scripts/make-admin.js",
     "fix-roles": "node src/scripts/fix-roles.js",
-    "update-branding": "node src/scripts/update-branding.js"
+    "update-branding": "node src/scripts/update-branding.js",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1029.0",
@@ -28,6 +31,14 @@
     "pg": "^8.11.3"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.2.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "globals": "^17.5.0",
+    "jest": "^30.3.0",
+    "nodemon": "^3.0.2",
+    "prettier": "^3.8.3",
+    "supertest": "^7.2.2"
   }
 }

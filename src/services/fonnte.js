@@ -20,7 +20,7 @@ class FonnteService {
       console.log('Testing Fonnte connection...');
       console.log('Target:', testTarget);
       console.log('Message:', testMessage);
-      
+
       // Gunakan Native FormData (Node.js 18+)
       // JANGAN set header Content-Type manual, native fetch akan otomatis set boundary
       const formData = new FormData();
@@ -31,7 +31,7 @@ class FonnteService {
       const response = await fetch(FONNTE_API_URL, {
         method: 'POST',
         headers: {
-          'Authorization': token,
+          Authorization: token,
           // Native fetch otomatis menambahkan Content-Type: multipart/form-data; boundary=...
         },
         body: formData,
@@ -64,7 +64,9 @@ class FonnteService {
       } else if (response.status === 400) {
         return {
           success: true, // Token valid, tapi parameter salah (misal nomor tidak terdaftar)
-          message: 'Token is valid but request failed: ' + (data.message || data.reason || 'Check parameters'),
+          message:
+            'Token is valid but request failed: ' +
+            (data.message || data.reason || 'Check parameters'),
           data: data.data || data.result || { status: 'active' },
         };
       } else if (response.status === 401 || response.status === 403) {
@@ -101,7 +103,7 @@ class FonnteService {
     try {
       // Normalize phone number
       let normalizedTarget = target.replace(/[^0-9]/g, '');
-      
+
       // Remove leading zero and add country code if needed
       if (normalizedTarget.startsWith('0')) {
         normalizedTarget = countryCode + normalizedTarget.substring(1);
@@ -113,7 +115,7 @@ class FonnteService {
         method: 'POST',
         mode: 'cors',
         headers: {
-          'Authorization': token,
+          Authorization: token,
         },
         body: this.createFormData({
           target: normalizedTarget,
@@ -125,15 +127,15 @@ class FonnteService {
 
       if (response.ok && data.status) {
         const isRegistered = data.registered && data.registered.length > 0;
-        
+
         return {
           success: true,
           isRegistered,
           target: normalizedTarget,
           registered: data.registered || [],
           notRegistered: data.not_registered || [],
-          message: isRegistered 
-            ? `Nomor ${normalizedTarget} terdaftar di WhatsApp` 
+          message: isRegistered
+            ? `Nomor ${normalizedTarget} terdaftar di WhatsApp`
             : `Nomor ${normalizedTarget} TIDAK terdaftar di WhatsApp`,
         };
       }
@@ -171,7 +173,7 @@ class FonnteService {
         method: 'POST',
         mode: 'cors',
         headers: {
-          'Authorization': token,
+          Authorization: token,
         },
         body: this.createFormData({
           target,
@@ -227,7 +229,7 @@ class FonnteService {
         method: 'POST',
         mode: 'cors',
         headers: {
-          'Authorization': token,
+          Authorization: token,
         },
         body: this.createFormData({
           target,
@@ -283,7 +285,7 @@ class FonnteService {
         method: 'POST',
         mode: 'cors',
         headers: {
-          'Authorization': token,
+          Authorization: token,
         },
         body: this.createFormData({
           target,
@@ -344,7 +346,7 @@ class FonnteService {
         method: 'POST',
         mode: 'cors',
         headers: {
-          'Authorization': token,
+          Authorization: token,
         },
         body: this.createFormData({
           target,
@@ -406,7 +408,7 @@ class FonnteService {
         method: 'POST',
         mode: 'cors',
         headers: {
-          'Authorization': token,
+          Authorization: token,
         },
         body: this.createFormData({
           target,
@@ -457,7 +459,16 @@ class FonnteService {
    * @returns {Promise<object>} Send result
    */
   async sendWithList(data) {
-    const { token, target, message, footer, buttonTitle, title, listData, countryCode = '62' } = data;
+    const {
+      token,
+      target,
+      message,
+      footer,
+      buttonTitle,
+      title,
+      listData,
+      countryCode = '62',
+    } = data;
 
     const listJSON = JSON.stringify({
       message,
@@ -472,7 +483,7 @@ class FonnteService {
         method: 'POST',
         mode: 'cors',
         headers: {
-          'Authorization': token,
+          Authorization: token,
         },
         body: this.createFormData({
           target,
@@ -516,7 +527,7 @@ class FonnteService {
    */
   createFormData(data) {
     const formData = new FormData();
-    Object.keys(data).forEach(key => {
+    Object.keys(data).forEach((key) => {
       formData.append(key, data[key]);
     });
     return formData;

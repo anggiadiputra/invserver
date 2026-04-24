@@ -58,34 +58,36 @@ async function processSubscriptions() {
 
 async function handleSubscriptionRenewal(sub) {
   const { user_id, price_monthly, plan_name, subscription_id, status, expires_at } = sub;
-  
+
   try {
     // Attempt to deduct balance
     await WalletService.deductBalance(
-      user_id, 
-      price_monthly, 
+      user_id,
+      price_monthly,
       `Perpanjangan paket ${plan_name} (Auto-renewal)`
     );
 
     // If success, update subscription
-    await pool.query(`
+    await pool.query(
+      `
       UPDATE subscriptions 
       SET 
         status = 'active', 
         expires_at = COALESCE(expires_at, CURRENT_DATE) + INTERVAL '30 days',
         updated_at = CURRENT_TIMESTAMP
       WHERE id = $1
-    `, [subscription_id]);
+    `,
+      [subscription_id]
+    );
 
     console.log(`[BillingJob] Successfully renewed User ${user_id} for ${plan_name}`);
-    
+
     // Send success email
     await sendNotification(sub, 'success');
-
   } catch (error) {
     if (error.message === 'INSUFFICIENT_BALANCE') {
       console.log(`[BillingJob] Insufficient balance for User ${user_id}. Handling failure...`);
-      
+
       const gracePeriodDays = 7;
       const expiryDate = new Date(expires_at || new Date());
       const now = new Date();
@@ -94,11 +96,12 @@ async function handleSubscriptionRenewal(sub) {
       if (diffDays > gracePeriodDays) {
         // Downgrade to free
         console.log(`[BillingJob] Grace period exceeded for User ${user_id}. Downgrading to Free.`);
-        
+
         const freePlan = await pool.query("SELECT id FROM plans WHERE slug = 'free'");
         const freePlanId = freePlan.rows[0].id;
 
-        await pool.query(`
+        await pool.query(
+          `
           UPDATE subscriptions 
           SET 
             plan_id = $1, 
@@ -106,7 +109,9 @@ async function handleSubscriptionRenewal(sub) {
             expires_at = NULL,
             updated_at = CURRENT_TIMESTAMP 
           WHERE id = $2
-        `, [freePlanId, subscription_id]);
+        `,
+          [freePlanId, subscription_id]
+        );
 
         await sendNotification(sub, 'downgrade');
       } else {
@@ -129,7 +134,7 @@ async function sendNotification(sub, type) {
   try {
     const settingsResult = await pool.query('SELECT * FROM system_settings LIMIT 1');
     const settings = settingsResult.rows[0];
-    
+
     if (!settings || !settings.smtp_host) return;
 
     let subject = '';
@@ -149,7 +154,7 @@ async function sendNotification(sub, type) {
     await emailService.sendEmail(settings, {
       to: sub.email,
       subject,
-      html
+      html,
     });
   } catch (err) {
     console.error('[BillingJob] Failed to send notification email:', err);

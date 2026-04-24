@@ -18,17 +18,26 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
     }
 
     // 1. Fetch data
-    const invoiceResult = await pool.query('SELECT * FROM invoices WHERE id = $1 AND user_id = $2', [invoiceId, req.userId]);
-    if (invoiceResult.rows.length === 0) return res.status(404).json({ success: false, message: 'Invoice not found' });
+    const invoiceResult = await pool.query(
+      'SELECT * FROM invoices WHERE id = $1 AND user_id = $2',
+      [invoiceId, req.userId]
+    );
+    if (invoiceResult.rows.length === 0)
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
     const invoice = invoiceResult.rows[0];
 
-    const customerResult = await pool.query('SELECT * FROM customers WHERE id = $1', [invoice.customer_id]);
+    const customerResult = await pool.query('SELECT * FROM customers WHERE id = $1', [
+      invoice.customer_id,
+    ]);
     const customer = customerResult.rows[0];
-    if (!customer || !customer.email) return res.status(400).json({ success: false, message: 'Customer email is not set' });
+    if (!customer || !customer.email)
+      return res.status(400).json({ success: false, message: 'Customer email is not set' });
 
-    const companyResult = await pool.query('SELECT * FROM company_settings WHERE user_id = $1', [req.userId]);
+    const companyResult = await pool.query('SELECT * FROM company_settings WHERE user_id = $1', [
+      req.userId,
+    ]);
     const companySettings = companyResult.rows[0] || {};
-    
+
     // Fetch global system settings as fallback
     const systemResult = await pool.query('SELECT * FROM system_settings LIMIT 1');
     const systemSettings = systemResult.rows[0] || {};
@@ -36,7 +45,9 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
     // Merge settings: User settings take priority, system settings as fallback
     const company = {
       ...systemSettings,
-      ...Object.fromEntries(Object.entries(companySettings).filter(([_, v]) => v != null && v !== ''))
+      ...Object.fromEntries(
+        Object.entries(companySettings).filter(([_, v]) => v != null && v !== '')
+      ),
     };
 
     if (!company.smtp_host || !company.smtp_user || !company.smtp_pass) {
@@ -46,16 +57,26 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
     // 2. Build Message
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const publicUrl = `${frontendUrl}/public/invoice/${invoice.invoice_number}`;
-    const formatRupiah = (amount) => `Rp${new Intl.NumberFormat('id-ID').format(Math.round(amount))}`;
-    const formatDate = (date) => new Date(date).toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' });
+    const formatRupiah = (amount) =>
+      `Rp${new Intl.NumberFormat('id-ID').format(Math.round(amount))}`;
+    const formatDate = (date) =>
+      new Date(date).toLocaleDateString('id-ID', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
 
     let emailTpl = company.email_invoice_template;
-    let subject = customSubject || `Invoice ${invoice.invoice_number} - ${company.company_name || 'Billing'}`;
+    let subject =
+      customSubject || `Invoice ${invoice.invoice_number} - ${company.company_name || 'Billing'}`;
 
     if (invoice.status === 'paid' && company.email_paid_template) {
       emailTpl = company.email_paid_template;
       if (!customSubject) subject = `Pembayaran Diterima - Invoice ${invoice.invoice_number}`;
-    } else if ((invoice.status === 'overdue' || invoice.status === 'sent') && company.email_reminder_template) {
+    } else if (
+      (invoice.status === 'overdue' || invoice.status === 'sent') &&
+      company.email_reminder_template
+    ) {
       emailTpl = company.email_reminder_template;
       if (!customSubject) subject = `Pengingat Pembayaran - Invoice ${invoice.invoice_number}`;
     }
@@ -67,7 +88,7 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
       '{issue_date}': formatDate(invoice.issue_date),
       '{due_date}': formatDate(invoice.due_date),
       '{total_amount}': formatRupiah(invoice.total_amount),
-      '{public_invoice_url}': publicUrl
+      '{public_invoice_url}': publicUrl,
     };
 
     let html = customMessage;
@@ -95,7 +116,7 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
     const result = await emailService.sendEmail(company, {
       to: customer.email,
       subject: subject,
-      html: html
+      html: html,
     });
 
     // 4. Log the send operation
@@ -107,9 +128,8 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
     res.json({
       success: true,
       message: 'Email sent successfully',
-      messageId: result.messageId
+      messageId: result.messageId,
     });
-
   } catch (error) {
     console.error('Manual Email Error:', error);
     res.status(500).json({ success: false, message: 'Failed to send email', error: error.message });
@@ -126,10 +146,9 @@ router.get('/logs', authMiddleware, async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const offset = (page - 1) * limit;
 
-    const countResult = await pool.query(
-      'SELECT COUNT(*) FROM email_logs WHERE user_id = $1',
-      [req.userId]
-    );
+    const countResult = await pool.query('SELECT COUNT(*) FROM email_logs WHERE user_id = $1', [
+      req.userId,
+    ]);
     const totalCount = parseInt(countResult.rows[0].count);
 
     const result = await pool.query(
@@ -148,8 +167,8 @@ router.get('/logs', authMiddleware, async (req, res) => {
         total: totalCount,
         page,
         limit,
-        totalPages: Math.ceil(totalCount / limit)
-      }
+        totalPages: Math.ceil(totalCount / limit),
+      },
     });
   } catch (error) {
     console.error('Error fetching Email logs:', error);
@@ -192,10 +211,10 @@ router.post('/logs/batch-delete', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Valid IDs array is required' });
     }
 
-    await pool.query(
-      'DELETE FROM email_logs WHERE id = ANY($1::int[]) AND user_id = $2',
-      [ids, req.userId]
-    );
+    await pool.query('DELETE FROM email_logs WHERE id = ANY($1::int[]) AND user_id = $2', [
+      ids,
+      req.userId,
+    ]);
 
     res.json({ message: `${ids.length} email logs deleted successfully` });
   } catch (error) {

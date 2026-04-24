@@ -13,11 +13,10 @@ async function debug() {
     `);
     console.log('--- Users Table Columns ---');
     console.table(res.rows);
-    
+
     const users = await pool.query('SELECT id, email, first_name, clerk_id FROM users');
     console.log('--- Current Users ---');
     console.table(users.rows);
-    
   } catch (err) {
     console.error('Debug error:', err.message);
   } finally {

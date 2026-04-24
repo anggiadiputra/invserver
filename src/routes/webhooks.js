@@ -8,7 +8,9 @@ const router = express.Router();
 router.post('/pakasir', async (req, res) => {
   const { order_id, amount, status, project } = req.body;
 
-  console.log(`[Webhook] Received Pakasir event: Order=${order_id}, Status=${status}, Amount=${amount}`);
+  console.log(
+    `[Webhook] Received Pakasir event: Order=${order_id}, Status=${status}, Amount=${amount}`
+  );
 
   try {
     // 1. Basic Validation
@@ -25,14 +27,14 @@ router.post('/pakasir', async (req, res) => {
       // Format: TOPUP-{userId}-{timestamp}
       const parts = order_id.split('-');
       if (parts.length < 2) throw new Error('Invalid TOPUP order_id format');
-      
+
       const userId = parseInt(parts[1]);
       const depositAmount = parseFloat(amount);
 
       // 3. Add balance to wallet
       await WalletService.addBalance(
-        userId, 
-        depositAmount, 
+        userId,
+        depositAmount,
         `Top-up saldo via Pakasir (Order: ${order_id})`,
         order_id
       );

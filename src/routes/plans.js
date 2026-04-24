@@ -25,8 +25,9 @@ router.get('/', async (req, res) => {
  */
 router.post('/', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { slug, name, description, price_monthly, max_invoices, max_customers, features } = req.body;
-    
+    const { slug, name, description, price_monthly, max_invoices, max_customers, features } =
+      req.body;
+
     if (!slug || !name || price_monthly === undefined) {
       return res.status(400).json({ error: 'Slug, name, and price_monthly are required' });
     }
@@ -36,24 +37,28 @@ router.post('/', authMiddleware, adminOnly, async (req, res) => {
     const parsedMaxInvoices = parseInt(max_invoices) || 0;
     const parsedMaxCustomers = parseInt(max_customers) || 0;
 
-    const result = await pool.query(`
+    const result = await pool.query(
+      `
       INSERT INTO plans (slug, name, description, price_monthly, max_invoices, max_customers, features)
       VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *
-    `, [
-      slug, 
-      name, 
-      description || '', 
-      parsedPrice, 
-      parsedMaxInvoices, 
-      parsedMaxCustomers, 
-      features || {}
-    ]);
-    
+    `,
+      [
+        slug,
+        name,
+        description || '',
+        parsedPrice,
+        parsedMaxInvoices,
+        parsedMaxCustomers,
+        features || {},
+      ]
+    );
+
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error creating plan:', error);
-    if (error.code === '23505') { // Unique violation
+    if (error.code === '23505') {
+      // Unique violation
       return res.status(400).json({ error: 'Slug must be unique' });
     }
     res.status(500).json({ error: error.message || 'Failed to create plan' });
@@ -66,8 +71,9 @@ router.post('/', authMiddleware, adminOnly, async (req, res) => {
 router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
-    const { slug, name, description, price_monthly, max_invoices, max_customers, features } = req.body;
-    
+    const { slug, name, description, price_monthly, max_invoices, max_customers, features } =
+      req.body;
+
     if (!slug || !name || price_monthly === undefined) {
       return res.status(400).json({ error: 'Slug, name, and price_monthly are required' });
     }
@@ -77,28 +83,31 @@ router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
     const parsedMaxInvoices = parseInt(max_invoices) || 0;
     const parsedMaxCustomers = parseInt(max_customers) || 0;
 
-    const result = await pool.query(`
+    const result = await pool.query(
+      `
       UPDATE plans 
       SET slug = $1, name = $2, description = $3, price_monthly = $4, 
           max_invoices = $5, max_customers = $6, features = $7,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = $8
       RETURNING *
-    `, [
-      slug, 
-      name, 
-      description || '', 
-      parsedPrice, 
-      parsedMaxInvoices, 
-      parsedMaxCustomers, 
-      features || {},
-      parseInt(id)
-    ]);
-    
+    `,
+      [
+        slug,
+        name,
+        description || '',
+        parsedPrice,
+        parsedMaxInvoices,
+        parsedMaxCustomers,
+        features || {},
+        parseInt(id),
+      ]
+    );
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Plan not found' });
     }
-    
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error updating plan:', error);
@@ -115,7 +124,7 @@ router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
 router.delete('/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // Check if it's the default 'free' plan
     const planResult = await pool.query('SELECT slug FROM plans WHERE id = $1', [id]);
     if (planResult.rows.length > 0 && planResult.rows[0].slug === 'free') {
@@ -124,13 +133,15 @@ router.delete('/:id', authMiddleware, adminOnly, async (req, res) => {
 
     // Attempt to delete (will fail if there are active subscriptions due to foreign keys, unless cascaded)
     await pool.query('DELETE FROM plans WHERE id = $1', [id]);
-    
+
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting plan:', error);
     // 23503 is foreign_key_violation
     if (error.code === '23503') {
-      return res.status(400).json({ error: 'Cannot delete plan because there are users subscribed to it' });
+      return res
+        .status(400)
+        .json({ error: 'Cannot delete plan because there are users subscribed to it' });
     }
     res.status(500).json({ error: 'Failed to delete plan' });
   }
@@ -163,28 +174,47 @@ router.post('/upgrade', authMiddleware, async (req, res) => {
     );
     const currentSub = subResult.rows[0];
 
+    // 2.5. Prevent duplicate transactions (Idempotency check)
+    // Check if there was a successful deduction for the same plan in the last 5 minutes
+    const recentTx = await pool.query(
+      `SELECT id FROM wallet_transactions 
+       WHERE user_id = $1 
+       AND type = 'deduction' 
+       AND status = 'completed' 
+       AND description LIKE $2
+       AND created_at > NOW() - INTERVAL '5 minutes'`,
+      [userId, `%${targetPlan.name}%`]
+    );
+
+    if (recentTx.rows.length > 0) {
+      return res.status(429).json({ 
+        error: 'Transaksi paket ini baru saja berhasil dilakukan. Jika saldo Anda terpotong namun paket belum berubah, silakan tunggu 1-2 menit atau hubungi bantuan.' 
+      });
+    }
+
     // 3. Deduct balance via WalletService
     // description: Upgrade ke [Plan Name]
     const subRefId = `SUB-${userId}-${Date.now()}`;
     await WalletService.deductBalance(
-      userId, 
-      targetPlan.price_monthly, 
+      userId,
+      targetPlan.price_monthly,
       `Upgrade/Pembaruan paket ke ${targetPlan.name}`,
       subRefId
     );
 
     // 4. Update Subscription
-    // Logic Model A: Access until end of period. 
+    // Logic Model A: Access until end of period.
     // If upgrading from Free, we start 30 days from now.
     // If renewing same plan, we add 30 days to current expiry if it's in the future.
-    
+
     let newExpiry = new Date();
     if (currentSub && currentSub.expires_at && new Date(currentSub.expires_at) > new Date()) {
       newExpiry = new Date(currentSub.expires_at);
     }
     newExpiry.setDate(newExpiry.getDate() + 30);
 
-    const updatedSub = await pool.query(`
+    const updatedSub = await pool.query(
+      `
       UPDATE subscriptions 
       SET 
         plan_id = $1, 
@@ -193,24 +223,25 @@ router.post('/upgrade', authMiddleware, async (req, res) => {
         updated_at = CURRENT_TIMESTAMP
       WHERE user_id = $3
       RETURNING *
-    `, [targetPlan.id, newExpiry, userId]);
+    `,
+      [targetPlan.id, newExpiry, userId]
+    );
 
     const subscription = updatedSub.rows[0];
 
     // Generate system invoice for subscription
     generateSystemInvoice(
-      userId, 
-      'subscription', 
-      targetPlan.price_monthly, 
-      `Pembayaran Paket: ${targetPlan.name}`, 
+      userId,
+      'subscription',
+      targetPlan.price_monthly,
+      `Pembayaran Paket: ${targetPlan.name}`,
       subRefId
     ).catch(console.error);
 
     res.json({
       message: `Successfully upgraded to ${targetPlan.name}`,
-      subscription
+      subscription,
     });
-
   } catch (error) {
     if (error.message === 'INSUFFICIENT_BALANCE') {
       return res.status(402).json({ error: 'Saldo tidak cukup untuk upgrade Paket' });

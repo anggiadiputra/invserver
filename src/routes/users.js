@@ -8,7 +8,7 @@ const router = express.Router();
 router.get('/', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { status, search, page, limit } = req.query;
-    
+
     let conditions = [];
     let params = [];
     let paramIdx = 1;
@@ -19,27 +19,32 @@ router.get('/', authMiddleware, adminOnly, async (req, res) => {
     }
 
     if (search) {
-      conditions.push(`(email ILIKE $${paramIdx} OR first_name ILIKE $${paramIdx} OR last_name ILIKE $${paramIdx} OR company_name ILIKE $${paramIdx})`);
+      conditions.push(
+        `(email ILIKE $${paramIdx} OR first_name ILIKE $${paramIdx} OR last_name ILIKE $${paramIdx} OR company_name ILIKE $${paramIdx})`
+      );
       params.push(`%${search}%`);
       paramIdx++;
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    
+
     if (page && limit) {
       const pageNum = Math.max(1, parseInt(page));
       const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
       const offset = (pageNum - 1) * limitNum;
 
       const [dataResult, countResult] = await Promise.all([
-        pool.query(`
+        pool.query(
+          `
           SELECT id, email, first_name, last_name, company_name, role, status, created_at 
           FROM users 
           ${whereClause} 
           ORDER BY created_at DESC 
           LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
-        `, [...params, limitNum, offset]),
-        pool.query(`SELECT COUNT(*) FROM users ${whereClause}`, params)
+        `,
+          [...params, limitNum, offset]
+        ),
+        pool.query(`SELECT COUNT(*) FROM users ${whereClause}`, params),
       ]);
 
       const total = parseInt(countResult.rows[0].count);
@@ -49,18 +54,21 @@ router.get('/', authMiddleware, adminOnly, async (req, res) => {
           total,
           page: pageNum,
           limit: limitNum,
-          totalPages: Math.ceil(total / limitNum)
-        }
+          totalPages: Math.ceil(total / limitNum),
+        },
       });
     }
 
-    const result = await pool.query(`
+    const result = await pool.query(
+      `
       SELECT 
         id, email, first_name, last_name, company_name, role, status, created_at 
       FROM users 
       ${whereClause}
       ORDER BY created_at DESC
-    `, params);
+    `,
+      params
+    );
 
     res.json({ users: result.rows });
   } catch (error) {
@@ -73,8 +81,9 @@ router.get('/', authMiddleware, adminOnly, async (req, res) => {
 router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { first_name, last_name, company_name, role, status } = req.body;
-    
-    const result = await pool.query(`
+
+    const result = await pool.query(
+      `
       UPDATE users 
       SET first_name = COALESCE($1, first_name),
           last_name = COALESCE($2, last_name),
@@ -84,7 +93,9 @@ router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
           updated_at = CURRENT_TIMESTAMP
       WHERE id = $6
       RETURNING id, email, first_name, last_name, company_name, role, status, created_at
-    `, [first_name, last_name, company_name, role, status, req.params.id]);
+    `,
+      [first_name, last_name, company_name, role, status, req.params.id]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
@@ -106,7 +117,7 @@ router.post('/batch-delete', authMiddleware, adminOnly, async (req, res) => {
     }
 
     // Prevent deleting self
-    const targetIds = ids.filter(id => parseInt(id) !== req.userId);
+    const targetIds = ids.filter((id) => parseInt(id) !== req.userId);
     if (targetIds.length === 0) {
       return res.status(400).json({ error: 'Cannot delete yourself' });
     }
@@ -127,8 +138,10 @@ router.delete('/:id', authMiddleware, adminOnly, async (req, res) => {
       return res.status(400).json({ error: 'Cannot delete yourself' });
     }
 
-    const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [req.params.id]);
-    
+    const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [
+      req.params.id,
+    ]);
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }

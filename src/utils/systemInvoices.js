@@ -1,42 +1,5 @@
 import pool from '../db/pool.js';
-import { sendInvoiceNotifications } from './notifications.js';
-
-/**
- * Ensures a 'Self' customer exists for the user.
- * This record is used as the 'customer' for platform invoices (Top-up, Subscription).
- */
-async function getOrCreateSelfCustomer(userId) {
-  // 1. Try to find existing self customer
-  const existing = await pool.query(
-    'SELECT id FROM customers WHERE user_id = $1 AND is_self = true LIMIT 1',
-    [userId]
-  );
-
-  if (existing.rows.length > 0) {
-    return existing.rows[0].id;
-  }
-
-  // 2. Not found, create one based on company settings or user info
-  const companyResult = await pool.query('SELECT * FROM company_settings WHERE user_id = $1 LIMIT 1', [userId]);
-  const userResult = await pool.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [userId]);
-  
-  const company = companyResult.rows[0] || {};
-  const user = userResult.rows[0] || {};
-
-  const name = company.company_name || `${user.first_name} ${user.last_name}`;
-  const email = company.company_email || user.email;
-  const phone = company.company_phone || '';
-  const address = company.company_address || '';
-
-  const insertResult = await pool.query(
-    `INSERT INTO customers (user_id, name, email, phone, address, is_self) 
-     VALUES ($1, $2, $3, $4, $5, true) 
-     RETURNING id`,
-    [userId, name, email, phone, address]
-  );
-
-  return insertResult.rows[0].id;
-}
+import { sendSystemInvoiceNotifications } from './notifications.js';
 
 /**
  * Generates a system invoice for a top-up or subscription transaction.
@@ -46,49 +9,57 @@ export async function generateSystemInvoice(userId, type, amount, description, r
   try {
     await client.query('BEGIN');
 
-    // 1. Get or create self customer
-    const customerId = await getOrCreateSelfCustomer(userId);
-
-    // 2. Generate unique invoice number
-    // Format: TOPUP-YYYYMMDD-REF or SUBS-YYYYMMDD-REF
+    // 1. Generate unique invoice number
+    // Format: TOPUP-YYYYMMDD-REF, SUBS-YYYYMMDD-REF, or REFUND-YYYYMMDD-REF
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const prefix = type === 'topup' ? 'TOPUP' : 'SUBS';
+    let prefix = 'SYS';
+    if (type === 'topup') prefix = 'TOPUP';
+    else if (type === 'subscription') prefix = 'SUBS';
+    else if (type === 'refund') prefix = 'REFUND';
+    
     const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
     const invoiceNumber = `${prefix}-${dateStr}-${randomSuffix}`;
 
-    // 3. Create Invoice Record (Automatically PAID)
+    // 2. Create System Invoice Record (Automatically PAID)
     const invoiceResult = await client.query(
-      `INSERT INTO invoices (
-        user_id, customer_id, invoice_number, issue_date, due_date, 
-        total_amount, tax_amount, paid_amount, status, invoice_type, system_ref_id, notes
-      ) VALUES ($1, $2, $3, CURRENT_DATE, CURRENT_DATE, $4, 0, $4, 'paid', $5, $6, $7)
+      `INSERT INTO system_invoices (
+        user_id, invoice_number, issue_date, 
+        total_amount, status, system_type, system_ref_id, notes
+      ) VALUES ($1, $2, CURRENT_DATE, $3, 'paid', $4, $5, $6)
       RETURNING *`,
-      [userId, customerId, invoiceNumber, amount, type, refId, `Invoice otomatis untuk ${description}`]
+      [
+        userId,
+        invoiceNumber,
+        amount,
+        type,
+        refId,
+        `Kwitansi otomatis untuk ${description}`,
+      ]
     );
 
     const invoice = invoiceResult.rows[0];
 
-    // 4. Create Invoice Item
+    // 4. Create System Invoice Item
     await client.query(
-      `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, tax_rate)
-       VALUES ($1, $2, 1, $3, 0)`,
+      `INSERT INTO system_invoice_items (system_invoice_id, description, amount)
+       VALUES ($1, $2, $3)`,
       [invoice.id, description, amount]
     );
 
     await client.query('COMMIT');
-    console.log(`[SystemInvoice] Generated ${invoiceNumber} for User ${userId}`);
+    console.log(`[SystemInvoice] Generated ${invoiceNumber} for User ${userId} (New Table)`);
 
-    // 5. Link to wallet transaction if refId matches (Top-up) or recently created
+    // 5. Link to wallet transaction if refId matches
     if (refId) {
       await pool.query(
-        'UPDATE wallet_transactions SET invoice_id = $1 WHERE user_id = $2 AND pakasir_order_id = $3',
+        'UPDATE wallet_transactions SET system_invoice_id = $1 WHERE user_id = $2 AND pakasir_order_id = $3',
         [invoice.id, userId, refId]
       );
     }
 
     // 6. Trigger notifications (Email/WhatsApp)
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    sendInvoiceNotifications(invoice.id, userId, frontendUrl).catch(err => {
+    sendSystemInvoiceNotifications(invoice.id, userId, frontendUrl).catch((err) => {
       console.error('[SystemInvoice] Notification failed:', err);
     });
 

@@ -20,10 +20,9 @@ export async function sendInvoiceWhatsApp(invoiceId, userId, baseUrl = 'http://l
     const invoice = invoiceResult.rows[0];
 
     // 2. Fetch Customer
-    const customerResult = await pool.query(
-      'SELECT * FROM customers WHERE id = $1',
-      [invoice.customer_id]
-    );
+    const customerResult = await pool.query('SELECT * FROM customers WHERE id = $1', [
+      invoice.customer_id,
+    ]);
     if (customerResult.rows.length === 0) return { success: false, message: 'Customer not found' };
     const customer = customerResult.rows[0];
     const customerPhone = customer.phone;
@@ -53,15 +52,20 @@ export async function sendInvoiceWhatsApp(invoiceId, userId, baseUrl = 'http://l
     }
 
     // 4. Fetch Items
-    const itemsResult = await pool.query(
-      'SELECT * FROM invoice_items WHERE invoice_id = $1',
-      [invoiceId]
-    );
+    const itemsResult = await pool.query('SELECT * FROM invoice_items WHERE invoice_id = $1', [
+      invoiceId,
+    ]);
     const items = itemsResult.rows;
 
     // 5. Build Message (Reuse logic from fonnte.js route)
-    const formatRupiah = (amount) => `Rp${new Intl.NumberFormat('id-ID').format(Math.round(amount))}`;
-    const formatDate = (date) => new Date(date).toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' });
+    const formatRupiah = (amount) =>
+      `Rp${new Intl.NumberFormat('id-ID').format(Math.round(amount))}`;
+    const formatDate = (date) =>
+      new Date(date).toLocaleDateString('id-ID', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
 
     // Message selection is already handled above in the fallback selection
 
@@ -94,7 +98,7 @@ export async function sendInvoiceWhatsApp(invoiceId, userId, baseUrl = 'http://l
       target: customerPhone,
       message,
       countryCode: '62',
-      delay: 2
+      delay: 2,
     });
 
     if (result.success) {

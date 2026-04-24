@@ -50,7 +50,7 @@ export async function verifyTurnstileToken(token) {
     }
     console.error('[Turnstile] Error during verification:', error);
     // In case of network errors to Cloudflare, we might want to fail open or closed.
-    // Given it's a security feature, failing closed (throwing) is safer, 
+    // Given it's a security feature, failing closed (throwing) is safer,
     // but might lock users out if Cloudflare is down.
     // For now, we'll throw to be safe.
     throw new Error('Unable to verify security token. Please try again later.');

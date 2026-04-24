@@ -33,10 +33,9 @@ router.post('/', authMiddleware, async (req, res) => {
 
       // If this is set as primary, unset all other primary accounts
       if (is_primary) {
-        await client.query(
-          'UPDATE bank_accounts SET is_primary = false WHERE user_id = $1',
-          [req.userId]
-        );
+        await client.query('UPDATE bank_accounts SET is_primary = false WHERE user_id = $1', [
+          req.userId,
+        ]);
       }
 
       const result = await client.query(
@@ -141,10 +140,9 @@ router.patch('/:id/primary', authMiddleware, async (req, res) => {
       await client.query('BEGIN');
 
       // Unset all other primary accounts
-      await client.query(
-        'UPDATE bank_accounts SET is_primary = false WHERE user_id = $1',
-        [req.userId]
-      );
+      await client.query('UPDATE bank_accounts SET is_primary = false WHERE user_id = $1', [
+        req.userId,
+      ]);
 
       // Set this one as primary
       const result = await client.query(

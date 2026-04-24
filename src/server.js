@@ -17,6 +17,8 @@ import walletRoutes from './routes/wallet.js';
 import webhookRoutes from './routes/webhooks.js';
 import plansRoutes from './routes/plans.js';
 import { initBillingJob } from './jobs/billing.js';
+import errorHandler from './middleware/errorHandler.js';
+import AppError from './utils/AppError.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -26,23 +28,25 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'https://app.diurusin.id',
-  process.env.FRONTEND_URL
+  process.env.FRONTEND_URL,
 ].filter(Boolean);
 
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1 || /^http:\/\/localhost:\d+$/.test(origin)) {
-      callback(null, true);
-    } else {
-      // Don't throw an error, just return false (no CORS headers)
-      // This prevents Express from catching an error and returning a 500
-      callback(null, false);
-    }
-  },
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.indexOf(origin) !== -1 || /^http:\/\/localhost:\d+$/.test(origin)) {
+        callback(null, true);
+      } else {
+        // Don't throw an error, just return false (no CORS headers)
+        // This prevents Express from catching an error and returning a 500
+        callback(null, false);
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 // Health check
@@ -75,15 +79,12 @@ app.get('/public/invoice/:id', (req, res) => {
 });
 
 // 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Not found' });
+app.all('*', (req, res, next) => {
+  next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
 });
 
-// Error handler
-app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: 'Internal server error' });
-});
+// Global Error handler
+app.use(errorHandler);
 
 // Only listen if not running as a Vercel serverless function
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {

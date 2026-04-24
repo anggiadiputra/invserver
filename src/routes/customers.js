@@ -2,41 +2,49 @@ import express from 'express';
 import pool from '../db/pool.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { checkCustomerQuota } from '../middleware/checkQuota.js';
+import catchAsync from '../utils/catchAsync.js';
+import AppError from '../utils/AppError.js';
 
 const router = express.Router();
 
 // Get all customers (supports pagination via ?page=&limit= and full list without params)
-router.get('/', authMiddleware, async (req, res) => {
-  try {
+router.get(
+  '/',
+  authMiddleware,
+  catchAsync(async (req, res) => {
     const { page, limit, search, status } = req.query;
 
     const statusClause = status ? `AND status = $${search ? 4 : 3}` : '';
     const searchClause = search ? `AND (name ILIKE $3 OR email ILIKE $3 OR phone ILIKE $3)` : '';
-    
+
     // If page/limit provided, use pagination
     if (page && limit) {
       const pageNum = Math.max(1, parseInt(page));
       const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
       const offset = (pageNum - 1) * limitNum;
-      
+
       let queryParams = [req.userId, limitNum];
       if (search) queryParams.push(`%${search}%`);
       if (status) queryParams.push(status);
       queryParams.push(offset);
-      
+
       const offsetParam = `$${queryParams.length}`;
 
       const [dataResult, countResult] = await Promise.all([
         pool.query(
-          `SELECT * FROM customers WHERE user_id = $1 ${searchClause} ${statusClause} ORDER BY created_at DESC LIMIT $2 OFFSET ${offsetParam}`,
+          `SELECT * FROM customers WHERE user_id = $1 AND is_self = false ${searchClause} ${statusClause} ORDER BY created_at DESC LIMIT $2 OFFSET ${offsetParam}`,
           queryParams
         ),
         pool.query(
-          `SELECT COUNT(*) FROM customers WHERE user_id = $1 ${searchClause} ${statusClause}`,
-          status 
-            ? (search ? [req.userId, `%${search}%`, status] : [req.userId, status])
-            : (search ? [req.userId, `%${search}%`] : [req.userId])
-        )
+          `SELECT COUNT(*) FROM customers WHERE user_id = $1 AND is_self = false ${searchClause} ${statusClause}`,
+          status
+            ? search
+              ? [req.userId, `%${search}%`, status]
+              : [req.userId, status]
+            : search
+              ? [req.userId, `%${search}%`]
+              : [req.userId]
+        ),
       ]);
 
       const total = parseInt(countResult.rows[0].count);
@@ -46,55 +54,66 @@ router.get('/', authMiddleware, async (req, res) => {
           total,
           page: pageNum,
           limit: limitNum,
-          totalPages: Math.ceil(total / limitNum)
-        }
+          totalPages: Math.ceil(total / limitNum),
+        },
       });
     }
 
     // No pagination – return all (backwards compatible)
     const result = await pool.query(
-      `SELECT * FROM customers WHERE user_id = $1 ${statusClause} ORDER BY created_at DESC`,
+      `SELECT * FROM customers WHERE user_id = $1 AND is_self = false ${statusClause} ORDER BY created_at DESC`,
       status ? [req.userId, status] : [req.userId]
     );
     res.json(result.rows);
-  } catch (error) {
-    console.error('Error fetching customers:', error);
-    res.status(500).json({ error: 'Failed to fetch customers' });
-  }
-});
+  })
+);
 
 // Batch delete customers
-router.post('/batch-delete', authMiddleware, async (req, res) => {
-  try {
+router.post(
+  '/batch-delete',
+  authMiddleware,
+  catchAsync(async (req, res, next) => {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
-      return res.status(400).json({ error: 'Valid IDs array is required' });
+      return next(new AppError('Valid IDs array is required', 400));
     }
 
-    await pool.query(
-      'DELETE FROM customers WHERE id = ANY($1::int[]) AND user_id = $2',
-      [ids, req.userId]
-    );
+    await pool.query('DELETE FROM customers WHERE id = ANY($1::int[]) AND user_id = $2', [
+      ids,
+      req.userId,
+    ]);
 
     res.json({ message: `${ids.length} customers deleted successfully` });
-  } catch (error) {
-    console.error('Error batch deleting customers:', error);
-    res.status(500).json({ error: 'Failed to batch delete customers' });
-  }
-});
+  })
+);
 
 // Create customer
-router.post('/', authMiddleware, checkCustomerQuota, async (req, res) => {
-  try {
+router.post(
+  '/',
+  authMiddleware,
+  checkCustomerQuota,
+  catchAsync(async (req, res, next) => {
     const {
-      name, email, phone, address, city, postal_code, country,
-      province_id, regency_id, district_id, village_id,
-      province_name, regency_name, district_name, village_name,
-      status = 'active'
+      name,
+      email,
+      phone,
+      address,
+      city,
+      postal_code,
+      country,
+      province_id,
+      regency_id,
+      district_id,
+      village_id,
+      province_name,
+      regency_name,
+      district_name,
+      village_name,
+      status = 'active',
     } = req.body;
 
     if (!name) {
-      return res.status(400).json({ error: 'Name is required' });
+      return next(new AppError('Name is required', 400));
     }
 
     const result = await pool.query(
@@ -105,47 +124,70 @@ router.post('/', authMiddleware, checkCustomerQuota, async (req, res) => {
         status
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *`,
       [
-        req.userId, name, email, phone, address, city, postal_code, country,
-        province_id, regency_id, district_id, village_id,
-        province_name, regency_name, district_name, village_name,
-        status
+        req.userId,
+        name,
+        email,
+        phone,
+        address,
+        city,
+        postal_code,
+        country,
+        province_id,
+        regency_id,
+        district_id,
+        village_id,
+        province_name,
+        regency_name,
+        district_name,
+        village_name,
+        status,
       ]
     );
 
     res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error('Error creating customer:', error);
-    res.status(500).json({ error: 'Failed to create customer' });
-  }
-});
+  })
+);
 
 // Get customer by ID
-router.get('/:id', authMiddleware, async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM customers WHERE id = $1 AND user_id = $2',
-      [req.params.id, req.userId]
-    );
+router.get(
+  '/:id',
+  authMiddleware,
+  catchAsync(async (req, res, next) => {
+    const result = await pool.query('SELECT * FROM customers WHERE id = $1 AND user_id = $2', [
+      req.params.id,
+      req.userId,
+    ]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Customer not found' });
+      return next(new AppError('Customer not found', 404));
     }
 
     res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Error fetching customer:', error);
-    res.status(500).json({ error: 'Failed to fetch customer' });
-  }
-});
+  })
+);
 
 // Update customer
-router.put('/:id', authMiddleware, async (req, res) => {
-  try {
+router.put(
+  '/:id',
+  authMiddleware,
+  catchAsync(async (req, res, next) => {
     const {
-      name, email, phone, address, city, postal_code, country,
-      province_id, regency_id, district_id, village_id,
-      province_name, regency_name, district_name, village_name,
-      status
+      name,
+      email,
+      phone,
+      address,
+      city,
+      postal_code,
+      country,
+      province_id,
+      regency_id,
+      district_id,
+      village_id,
+      province_name,
+      regency_name,
+      district_name,
+      village_name,
+      status,
     } = req.body;
 
     const result = await pool.query(
@@ -158,42 +200,51 @@ router.put('/:id', authMiddleware, async (req, res) => {
         updated_at = CURRENT_TIMESTAMP 
       WHERE id = $17 AND user_id = $18 RETURNING *`,
       [
-        name, email, phone, address, city, postal_code, country,
-        province_id, regency_id, district_id, village_id,
-        province_name, regency_name, district_name, village_name,
+        name,
+        email,
+        phone,
+        address,
+        city,
+        postal_code,
+        country,
+        province_id,
+        regency_id,
+        district_id,
+        village_id,
+        province_name,
+        regency_name,
+        district_name,
+        village_name,
         status,
-        req.params.id, req.userId
+        req.params.id,
+        req.userId,
       ]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Customer not found' });
+      return next(new AppError('Customer not found', 404));
     }
 
     res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Error updating customer:', error);
-    res.status(500).json({ error: 'Failed to update customer' });
-  }
-});
+  })
+);
 
 // Delete customer
-router.delete('/:id', authMiddleware, async (req, res) => {
-  try {
+router.delete(
+  '/:id',
+  authMiddleware,
+  catchAsync(async (req, res, next) => {
     const result = await pool.query(
       'DELETE FROM customers WHERE id = $1 AND user_id = $2 RETURNING *',
       [req.params.id, req.userId]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Customer not found' });
+      return next(new AppError('Customer not found', 404));
     }
 
     res.json({ message: 'Customer deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting customer:', error);
-    res.status(500).json({ error: 'Failed to delete customer' });
-  }
-});
+  })
+);
 
 export default router;

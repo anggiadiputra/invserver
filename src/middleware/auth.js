@@ -53,23 +53,13 @@ async function importPublicKey(jwk) {
   if (!subtle) throw new Error('WebCrypto subtle is not available in this environment');
 
   if (jwk.kty === 'OKP' && jwk.crv === 'Ed25519') {
-    return subtle.importKey(
-      'jwk',
-      jwk,
-      { name: 'Ed25519' },
-      true,
-      ['verify']
-    );
+    return subtle.importKey('jwk', jwk, { name: 'Ed25519' }, true, ['verify']);
   }
 
   // Default to RSA if kty is RSA or not specified
-  return subtle.importKey(
-    'jwk',
-    jwk,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    true,
-    ['verify']
-  );
+  return subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, true, [
+    'verify',
+  ]);
 }
 
 async function verifyNeonJWT(token) {
@@ -110,11 +100,10 @@ async function verifyNeonJWT(token) {
     const publicKey = await importPublicKey(jwk);
     const subtle = crypto.subtle || (crypto.webcrypto && crypto.webcrypto.subtle);
     const data = new TextEncoder().encode(signingInput);
-    
+
     // Determine verify algorithm based on JWK or Header
-    const verifyAlgorithm = (jwk.kty === 'OKP' || header.alg === 'EdDSA') 
-      ? { name: 'Ed25519' } 
-      : 'RSASSA-PKCS1-v1_5';
+    const verifyAlgorithm =
+      jwk.kty === 'OKP' || header.alg === 'EdDSA' ? { name: 'Ed25519' } : 'RSASSA-PKCS1-v1_5';
 
     const valid = await subtle.verify(verifyAlgorithm, publicKey, signature, data);
     if (!valid) {
@@ -146,7 +135,9 @@ export async function adminOnly(req, res, next) {
     const user = result.rows[0];
 
     if (!user || user.role !== 'admin') {
-      return res.status(403).json({ error: 'Akses terbatas. Hanya Admin yang dapat mengakses fitur ini.' });
+      return res
+        .status(403)
+        .json({ error: 'Akses terbatas. Hanya Admin yang dapat mengakses fitur ini.' });
     }
     next();
   } catch (error) {
@@ -157,7 +148,10 @@ export async function adminOnly(req, res, next) {
 
 async function audit(message, details = {}) {
   try {
-    await pool.query('INSERT INTO auth_logs (message, details) VALUES ($1, $2)', [message, JSON.stringify(details)]);
+    await pool.query('INSERT INTO auth_logs (message, details) VALUES ($1, $2)', [
+      message,
+      JSON.stringify(details),
+    ]);
   } catch (err) {
     console.error('[Audit] Failed to write log:', err.message);
   }
@@ -186,7 +180,10 @@ export async function authMiddleware(req, res, next) {
   }
 
   if (!token || token === 'null' || token === 'undefined') {
-    await audit('NO TOKEN', { header: authHeader ? 'Present' : 'Missing', cookie: req.headers.cookie ? 'Present' : 'Missing' });
+    await audit('NO TOKEN', {
+      header: authHeader ? 'Present' : 'Missing',
+      cookie: req.headers.cookie ? 'Present' : 'Missing',
+    });
     return res.status(401).json({ error: 'No token provided' });
   }
 
@@ -196,43 +193,53 @@ export async function authMiddleware(req, res, next) {
     if (neonDecoded) {
       const neonId = neonDecoded.sub;
       // Extract email from common fields in BetterAuth/Neon/standard OIDC tokens
-      const emailRaw = neonDecoded.email || 
-                       neonDecoded.email_address || 
-                       (neonDecoded.user && neonDecoded.user.email);
-      
+      const emailRaw =
+        neonDecoded.email ||
+        neonDecoded.email_address ||
+        (neonDecoded.user && neonDecoded.user.email);
+
       const email = emailRaw ? emailRaw.toLowerCase() : null;
 
       if (!email) {
-        await audit('NEON EMAIL MISSING', { payloadStart: JSON.stringify(neonDecoded).substring(0, 100) });
+        await audit('NEON EMAIL MISSING', {
+          payloadStart: JSON.stringify(neonDecoded).substring(0, 100),
+        });
       }
 
       try {
         // 1. Precise lookup by neon_user_id
-        let dbRes = await pool.query(
-          'SELECT id, role FROM users WHERE neon_user_id = $1',
-          [neonId]
-        );
+        let dbRes = await pool.query('SELECT id, role FROM users WHERE neon_user_id = $1', [
+          neonId,
+        ]);
 
         // 2. If not found, try robust lookup by LOWER(email)
         if (dbRes.rows.length === 0 && email) {
-          dbRes = await pool.query(
-            'SELECT id, role FROM users WHERE LOWER(email) = LOWER($1)',
-            [email]
-          );
-          
+          dbRes = await pool.query('SELECT id, role FROM users WHERE LOWER(email) = LOWER($1)', [
+            email,
+          ]);
+
           if (dbRes.rows.length > 0) {
             const existingUser = dbRes.rows[0];
-            
+
             // SECURITY FIX: Prohibit linking to existing 'admin' accounts
             if (existingUser.role === 'admin') {
-              await audit('SECURITY LINK BLOCKED', { email, neonId, reason: 'Target user is admin' });
-              return res.status(403).json({ error: 'Email ini terdaftar sebagai Admin. Sinkronisasi identitas otomatis diblokir untuk keamanan.' });
+              await audit('SECURITY LINK BLOCKED', {
+                email,
+                neonId,
+                reason: 'Target user is admin',
+              });
+              return res
+                .status(403)
+                .json({
+                  error:
+                    'Email ini terdaftar sebagai Admin. Sinkronisasi identitas otomatis diblokir untuk keamanan.',
+                });
             }
 
-            await pool.query(
-              'UPDATE users SET neon_user_id = $1 WHERE id = $2',
-              [neonId, existingUser.id]
-            );
+            await pool.query('UPDATE users SET neon_user_id = $1 WHERE id = $2', [
+              neonId,
+              existingUser.id,
+            ]);
             await audit('NEON LINKED', { email, neonId, userId: existingUser.id });
           }
         }
@@ -242,10 +249,10 @@ export async function authMiddleware(req, res, next) {
           const client = await pool.connect();
           try {
             await client.query('BEGIN');
-            
+
             const name = neonDecoded.name || email.split('@')[0];
             const [firstName, ...rest] = name.split(' ');
-            
+
             // a. Create User
             const insertRes = await client.query(
               `INSERT INTO users (email, neon_user_id, first_name, last_name, role)
@@ -271,10 +278,9 @@ export async function authMiddleware(req, res, next) {
             }
 
             // d. Create Wallet
-            await client.query(
-              'INSERT INTO user_wallets (user_id, balance) VALUES ($1, 0)',
-              [newUser.id]
-            );
+            await client.query('INSERT INTO user_wallets (user_id, balance) VALUES ($1, 0)', [
+              newUser.id,
+            ]);
 
             await client.query('COMMIT');
             dbRes = insertRes;

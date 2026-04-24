@@ -17,13 +17,13 @@ export function calculateInvoiceTotals(items = [], preferences = {}) {
     // Apply discount only if show_discount is true
     const discountPercent = parseFloat(item.discount) || 0;
     const discountAmount = show_discount ? lineTotal * (discountPercent / 100) : 0;
-    
+
     const subtotal = lineTotal - discountAmount;
-    
+
     // Apply tax only if show_tax is true
     const taxRate = parseFloat(item.tax_rate) || 0;
     const lineTax = show_tax ? subtotal * (taxRate / 100) : 0;
-    
+
     totalAmount += subtotal;
     taxAmount += lineTax;
   }

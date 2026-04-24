@@ -38,12 +38,14 @@ Mohon segera lakukan pembayaran melalui tautan berikut agar layanan tetap berjal
 Abaikan pesan ini jika Anda sudah melakukan pembayaran. Terima kasih.
 
 Salam,
-{company_name}`
+{company_name}`,
 };
 
 async function restoreTemplates() {
   try {
-    const userRes = await pool.query('SELECT id FROM users WHERE email = $1', ['anggiadiputra@gmail.com']);
+    const userRes = await pool.query('SELECT id FROM users WHERE email = $1', [
+      'anggiadiputra@gmail.com',
+    ]);
     if (userRes.rows.length === 0) {
       console.error('User not found');
       return;
@@ -56,7 +58,12 @@ async function restoreTemplates() {
            wa_paid_template = $2, 
            wa_reminder_template = $3 
        WHERE user_id = $4`,
-      [templates.wa_invoice_template, templates.wa_paid_template, templates.wa_reminder_template, userId]
+      [
+        templates.wa_invoice_template,
+        templates.wa_paid_template,
+        templates.wa_reminder_template,
+        userId,
+      ]
     );
 
     console.log('✅ Templates restored successfully for', userId);

@@ -10,10 +10,9 @@ const router = express.Router();
 router.get('/', authMiddleware, async (req, res) => {
   try {
     // Fetch user-specific company settings
-    const companyResult = await pool.query(
-      'SELECT * FROM company_settings WHERE user_id = $1',
-      [req.userId]
-    );
+    const companyResult = await pool.query('SELECT * FROM company_settings WHERE user_id = $1', [
+      req.userId,
+    ]);
 
     // Fetch global system settings
     const systemResult = await pool.query('SELECT * FROM system_settings LIMIT 1');
@@ -38,13 +37,25 @@ router.get('/', authMiddleware, async (req, res) => {
 
     // Keys that can be overridden by user
     const restorableKeys = [
-      'company_name', 'company_email', 'company_phone', 'company_address', 'company_logo',
-      'wa_invoice_template', 'wa_paid_template', 'wa_reminder_template',
-      'email_invoice_template', 'email_paid_template', 'email_reminder_template'
+      'company_name',
+      'company_email',
+      'company_phone',
+      'company_address',
+      'company_logo',
+      'wa_invoice_template',
+      'wa_paid_template',
+      'wa_reminder_template',
+      'email_invoice_template',
+      'email_paid_template',
+      'email_reminder_template',
     ];
 
     for (const key of restorableKeys) {
-      if (companySettings[key] !== null && companySettings[key] !== undefined && companySettings[key] !== '') {
+      if (
+        companySettings[key] !== null &&
+        companySettings[key] !== undefined &&
+        companySettings[key] !== ''
+      ) {
         merged[key] = companySettings[key];
       }
     }
@@ -75,13 +86,36 @@ router.get('/system', authMiddleware, adminOnly, async (req, res) => {
 router.put('/system', authMiddleware, adminOnly, async (req, res) => {
   try {
     const fields = [
-      'app_name', 'primary_color', 'sidebar_color', 'company_logo',
-      'turnstile_site_key', 'turnstile_secret_key', 'fonnte_token', 'fonnte_test_target', 'fonnte_test_message',
-      'wa_invoice_template', 'wa_paid_template', 'wa_reminder_template',
-      's3_endpoint', 's3_bucket_name', 's3_region', 's3_access_key', 's3_secret_key', 's3_public_url',
-      'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from_email', 'smtp_from_name', 'smtp_encryption',
-      'smtp_test_target', 'smtp_test_message',
-      'pakasir_slug', 'pakasir_api_key', 'pakasir_is_sandbox'
+      'app_name',
+      'primary_color',
+      'sidebar_color',
+      'company_logo',
+      'turnstile_site_key',
+      'turnstile_secret_key',
+      'fonnte_token',
+      'fonnte_test_target',
+      'fonnte_test_message',
+      'wa_invoice_template',
+      'wa_paid_template',
+      'wa_reminder_template',
+      's3_endpoint',
+      's3_bucket_name',
+      's3_region',
+      's3_access_key',
+      's3_secret_key',
+      's3_public_url',
+      'smtp_host',
+      'smtp_port',
+      'smtp_user',
+      'smtp_pass',
+      'smtp_from_email',
+      'smtp_from_name',
+      'smtp_encryption',
+      'smtp_test_target',
+      'smtp_test_message',
+      'pakasir_slug',
+      'pakasir_api_key',
+      'pakasir_is_sandbox',
     ];
 
     const updates = [];
@@ -103,7 +137,7 @@ router.put('/system', authMiddleware, adminOnly, async (req, res) => {
     updates.push('updated_at = CURRENT_TIMESTAMP');
     const query = `UPDATE system_settings SET ${updates.join(', ')} WHERE id = 1 RETURNING *`;
     const result = await pool.query(query, values);
-    
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error('System settings update error:', error);
@@ -150,7 +184,7 @@ router.post('/test-s3', authMiddleware, adminOnly, async (req, res) => {
     const response = await s3Client.send(command);
 
     console.log('S3 Test: Successfully connected, checking bucket:', s3_bucket_name);
-    const bucketExists = response.Buckets?.some(b => b.Name === s3_bucket_name);
+    const bucketExists = response.Buckets?.some((b) => b.Name === s3_bucket_name);
 
     if (bucketExists) {
       console.log('S3 Test: Bucket found');
@@ -178,7 +212,11 @@ router.post('/test-s3', authMiddleware, adminOnly, async (req, res) => {
 
     if (error.name === 'CredentialsProviderError' || error.message?.includes('credentials')) {
       errorMessage = 'Invalid Access Key or Secret Key';
-    } else if (error.name === 'NetworkingError' || error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+    } else if (
+      error.name === 'NetworkingError' ||
+      error.code === 'ECONNREFUSED' ||
+      error.code === 'ENOTFOUND'
+    ) {
       errorMessage = 'Cannot connect to S3 endpoint. Check the endpoint URL';
     } else if (error.message?.includes('NoSuchBucket')) {
       errorMessage = `Bucket "${req.body.s3_bucket_name}" not found`;
@@ -209,7 +247,17 @@ router.post('/test-s3', authMiddleware, adminOnly, async (req, res) => {
  */
 router.post('/test-smtp', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from_email, smtp_from_name, smtp_encryption, smtp_test_target, smtp_test_message } = req.body;
+    const {
+      smtp_host,
+      smtp_port,
+      smtp_user,
+      smtp_pass,
+      smtp_from_email,
+      smtp_from_name,
+      smtp_encryption,
+      smtp_test_target,
+      smtp_test_message,
+    } = req.body;
 
     console.log('SMTP Test Request received:', {
       host: smtp_host,
@@ -220,7 +268,14 @@ router.post('/test-smtp', authMiddleware, adminOnly, async (req, res) => {
       encryption: smtp_encryption,
     });
 
-    if (!smtp_host || !smtp_port || !smtp_user || !smtp_pass || !smtp_from_email || !smtp_test_target) {
+    if (
+      !smtp_host ||
+      !smtp_port ||
+      !smtp_user ||
+      !smtp_pass ||
+      !smtp_from_email ||
+      !smtp_test_target
+    ) {
       console.error('SMTP Test: Missing required fields');
       return res.status(400).json({
         success: false,
@@ -255,14 +310,16 @@ router.post('/test-smtp', authMiddleware, adminOnly, async (req, res) => {
     });
 
     console.log('SMTP Test: Sending test email to:', smtp_test_target);
-    
+
     // Send test email
     const info = await transporter.sendMail({
       from: smtp_from_name ? `"${smtp_from_name}" <${smtp_from_email}>` : smtp_from_email,
       to: smtp_test_target,
       subject: `Test Email from ${appName}`,
-      text: smtp_test_message || `This is a test email from ${appName}. If you received this, your SMTP configuration is working correctly!`,
-      html: smtp_test_message 
+      text:
+        smtp_test_message ||
+        `This is a test email from ${appName}. If you received this, your SMTP configuration is working correctly!`,
+      html: smtp_test_message
         ? `<p>${smtp_test_message}</p><hr><p><small>This is a test email from <strong>${appName}</strong></small></p>`
         : `<p>This is a test email from <strong>${appName}</strong>.</p><p>If you received this, your SMTP configuration is working correctly!</p>`,
     });
@@ -283,7 +340,11 @@ router.post('/test-smtp', authMiddleware, adminOnly, async (req, res) => {
 
     if (error.code === 'EAUTH' || error.message?.includes('Authentication')) {
       errorMessage = 'Authentication failed. Check your username and password';
-    } else if (error.code === 'ECONNECTION' || error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+    } else if (
+      error.code === 'ECONNECTION' ||
+      error.code === 'ECONNREFUSED' ||
+      error.code === 'ENOTFOUND'
+    ) {
       errorMessage = 'Cannot connect to SMTP server. Check the host and port';
     } else if (error.code === 'ETLS' || error.message?.includes('TLS')) {
       errorMessage = 'TLS/SSL error. Check your encryption settings';
@@ -308,40 +369,98 @@ router.post('/test-smtp', authMiddleware, adminOnly, async (req, res) => {
 router.put('/', authMiddleware, async (req, res) => {
   try {
     const {
-      company_name, company_email, company_phone, company_address, company_logo,
-      wa_invoice_template, wa_paid_template, wa_reminder_template,
-      email_invoice_template, email_paid_template, email_reminder_template,
-      company_city, company_province, company_country, company_postal_code, company_mobile_phone, company_website,
-      province_id, regency_id, district_id, village_id,
-      province_name, regency_name, district_name, village_name
+      company_name,
+      company_email,
+      company_phone,
+      company_address,
+      company_logo,
+      wa_invoice_template,
+      wa_paid_template,
+      wa_reminder_template,
+      email_invoice_template,
+      email_paid_template,
+      email_reminder_template,
+      company_city,
+      company_province,
+      company_country,
+      company_postal_code,
+      company_mobile_phone,
+      company_website,
+      province_id,
+      regency_id,
+      district_id,
+      village_id,
+      province_name,
+      regency_name,
+      district_name,
+      village_name,
     } = req.body;
 
     // Check if settings exist
-    const existing = await pool.query(
-      'SELECT * FROM company_settings WHERE user_id = $1',
-      [req.userId]
-    );
+    const existing = await pool.query('SELECT * FROM company_settings WHERE user_id = $1', [
+      req.userId,
+    ]);
 
     let result;
     if (existing.rows.length === 0) {
       // Create new settings (INSERT)
       const insertFields = [
-        'user_id', 'company_name', 'company_email', 'company_phone', 'company_address', 'company_logo',
-        'wa_invoice_template', 'wa_paid_template', 'wa_reminder_template',
-        'email_invoice_template', 'email_paid_template', 'email_reminder_template',
-        'company_city', 'company_province', 'company_country', 'company_postal_code', 'company_mobile_phone', 'company_website',
-        'province_id', 'regency_id', 'district_id', 'village_id',
-        'province_name', 'regency_name', 'district_name', 'village_name'
+        'user_id',
+        'company_name',
+        'company_email',
+        'company_phone',
+        'company_address',
+        'company_logo',
+        'wa_invoice_template',
+        'wa_paid_template',
+        'wa_reminder_template',
+        'email_invoice_template',
+        'email_paid_template',
+        'email_reminder_template',
+        'company_city',
+        'company_province',
+        'company_country',
+        'company_postal_code',
+        'company_mobile_phone',
+        'company_website',
+        'province_id',
+        'regency_id',
+        'district_id',
+        'village_id',
+        'province_name',
+        'regency_name',
+        'district_name',
+        'village_name',
       ];
 
       const placeholders = insertFields.map((_, i) => `$${i + 1}`).join(', ');
       const values = [
-        req.userId, company_name, company_email, company_phone, company_address, company_logo,
-        wa_invoice_template, wa_paid_template, wa_reminder_template,
-        email_invoice_template, email_paid_template, email_reminder_template,
-        company_city, company_province, company_country, company_postal_code, company_mobile_phone, company_website,
-        province_id, regency_id, district_id, village_id,
-        province_name, regency_name, district_name, village_name
+        req.userId,
+        company_name,
+        company_email,
+        company_phone,
+        company_address,
+        company_logo,
+        wa_invoice_template,
+        wa_paid_template,
+        wa_reminder_template,
+        email_invoice_template,
+        email_paid_template,
+        email_reminder_template,
+        company_city,
+        company_province,
+        company_country,
+        company_postal_code,
+        company_mobile_phone,
+        company_website,
+        province_id,
+        regency_id,
+        district_id,
+        village_id,
+        province_name,
+        regency_name,
+        district_name,
+        village_name,
       ];
 
       const query = `INSERT INTO company_settings (${insertFields.join(', ')}) VALUES (${placeholders}) RETURNING *`;
@@ -354,12 +473,31 @@ router.put('/', authMiddleware, async (req, res) => {
 
       // List of allowed fields for user-specific settings
       const allowedFields = [
-        'company_name', 'company_email', 'company_phone', 'company_address', 'company_logo',
-        'wa_invoice_template', 'wa_paid_template', 'wa_reminder_template',
-        'email_invoice_template', 'email_paid_template', 'email_reminder_template',
-        'company_city', 'company_province', 'company_country', 'company_postal_code', 'company_mobile_phone', 'company_website',
-        'province_id', 'regency_id', 'district_id', 'village_id',
-        'province_name', 'regency_name', 'district_name', 'village_name'
+        'company_name',
+        'company_email',
+        'company_phone',
+        'company_address',
+        'company_logo',
+        'wa_invoice_template',
+        'wa_paid_template',
+        'wa_reminder_template',
+        'email_invoice_template',
+        'email_paid_template',
+        'email_reminder_template',
+        'company_city',
+        'company_province',
+        'company_country',
+        'company_postal_code',
+        'company_mobile_phone',
+        'company_website',
+        'province_id',
+        'regency_id',
+        'district_id',
+        'village_id',
+        'province_name',
+        'regency_name',
+        'district_name',
+        'village_name',
       ];
 
       for (const field of allowedFields) {

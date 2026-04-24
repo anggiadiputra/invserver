@@ -104,7 +104,18 @@ router.post('/validate-number', authMiddleware, async (req, res) => {
  */
 router.post('/send', authMiddleware, async (req, res) => {
   try {
-    const { target, message, countryCode, url, filename, schedule, delay, buttonJSON, templateJSON, listJSON } = req.body;
+    const {
+      target,
+      message,
+      countryCode,
+      url,
+      filename,
+      schedule,
+      delay,
+      buttonJSON,
+      templateJSON,
+      listJSON,
+    } = req.body;
 
     // Validation
     if (!target || !message) {
@@ -192,7 +203,20 @@ router.post('/send', authMiddleware, async (req, res) => {
       // Log the send operation
       await pool.query(
         'INSERT INTO whatsapp_logs (user_id, target, message_type, status, sent_at) VALUES ($1, $2, $3, $4, NOW())',
-        [req.userId, target, buttonJSON ? 'button' : templateJSON ? 'template' : listJSON ? 'list' : url ? 'attachment' : 'text', 'sent']
+        [
+          req.userId,
+          target,
+          buttonJSON
+            ? 'button'
+            : templateJSON
+              ? 'template'
+              : listJSON
+                ? 'list'
+                : url
+                  ? 'attachment'
+                  : 'text',
+          'sent',
+        ]
       );
 
       res.json(result);
@@ -253,10 +277,9 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
     const invoice = invoiceResult.rows[0];
 
     // Fetch customer data
-    const customerResult = await pool.query(
-      'SELECT * FROM customers WHERE id = $1',
-      [invoice.customer_id]
-    );
+    const customerResult = await pool.query('SELECT * FROM customers WHERE id = $1', [
+      invoice.customer_id,
+    ]);
 
     const customer = customerResult.rows[0];
 
@@ -269,10 +292,9 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
     const company = companySettings.rows[0] || {};
 
     // Fetch invoice items
-    const itemsResult = await pool.query(
-      'SELECT * FROM invoice_items WHERE invoice_id = $1',
-      [invoiceId]
-    );
+    const itemsResult = await pool.query('SELECT * FROM invoice_items WHERE invoice_id = $1', [
+      invoiceId,
+    ]);
 
     const items = itemsResult.rows;
 
@@ -298,7 +320,10 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
 
       if (invoice.status === 'paid' && company.wa_paid_template) {
         tpl = company.wa_paid_template;
-      } else if ((invoice.status === 'overdue' || invoice.status === 'sent') && company.wa_reminder_template) {
+      } else if (
+        (invoice.status === 'overdue' || invoice.status === 'sent') &&
+        company.wa_reminder_template
+      ) {
         tpl = company.wa_reminder_template;
       }
 
@@ -362,7 +387,10 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
 
     if (result.success) {
       // Update invoice status to 'sent'
-      await pool.query('UPDATE invoices SET status = $1, updated_at = NOW() WHERE id = $2', ['sent', invoiceId]);
+      await pool.query('UPDATE invoices SET status = $1, updated_at = NOW() WHERE id = $2', [
+        'sent',
+        invoiceId,
+      ]);
 
       // Log the send operation
       await pool.query(
@@ -403,10 +431,9 @@ router.get('/logs', authMiddleware, async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const offset = (page - 1) * limit;
 
-    const countResult = await pool.query(
-      'SELECT COUNT(*) FROM whatsapp_logs WHERE user_id = $1',
-      [req.userId]
-    );
+    const countResult = await pool.query('SELECT COUNT(*) FROM whatsapp_logs WHERE user_id = $1', [
+      req.userId,
+    ]);
     const totalCount = parseInt(countResult.rows[0].count);
 
     const result = await pool.query(
@@ -425,8 +452,8 @@ router.get('/logs', authMiddleware, async (req, res) => {
         total: totalCount,
         page,
         limit,
-        totalPages: Math.ceil(totalCount / limit)
-      }
+        totalPages: Math.ceil(totalCount / limit),
+      },
     });
   } catch (error) {
     console.error('Error fetching WA logs:', error);
@@ -469,10 +496,10 @@ router.post('/logs/batch-delete', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Valid IDs array is required' });
     }
 
-    await pool.query(
-      'DELETE FROM whatsapp_logs WHERE id = ANY($1::int[]) AND user_id = $2',
-      [ids, req.userId]
-    );
+    await pool.query('DELETE FROM whatsapp_logs WHERE id = ANY($1::int[]) AND user_id = $2', [
+      ids,
+      req.userId,
+    ]);
 
     res.json({ message: `${ids.length} WhatsApp logs deleted successfully` });
   } catch (error) {

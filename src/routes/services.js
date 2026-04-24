@@ -36,10 +36,7 @@ router.get('/', authMiddleware, async (req, res) => {
           `SELECT * FROM services WHERE ${whereClause} ORDER BY created_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
           [...params, limitNum, offset]
         ),
-        pool.query(
-          `SELECT COUNT(*) FROM services WHERE ${whereClause}`,
-          params
-        )
+        pool.query(`SELECT COUNT(*) FROM services WHERE ${whereClause}`, params),
       ]);
 
       const total = parseInt(countResult.rows[0].count);
@@ -49,8 +46,8 @@ router.get('/', authMiddleware, async (req, res) => {
           total,
           page: pageNum,
           limit: limitNum,
-          totalPages: Math.ceil(total / limitNum)
-        }
+          totalPages: Math.ceil(total / limitNum),
+        },
       });
     }
 
@@ -74,10 +71,10 @@ router.post('/batch-delete', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Valid IDs array is required' });
     }
 
-    await pool.query(
-      'DELETE FROM services WHERE id = ANY($1::int[]) AND user_id = $2',
-      [ids, req.userId]
-    );
+    await pool.query('DELETE FROM services WHERE id = ANY($1::int[]) AND user_id = $2', [
+      ids,
+      req.userId,
+    ]);
 
     res.json({ message: `${ids.length} services deleted successfully` });
   } catch (error) {
@@ -110,7 +107,7 @@ router.post('/', authMiddleware, async (req, res) => {
     console.error('Error creating service:', error);
     res.status(500).json({
       error: 'Failed to create service',
-      details: error.message
+      details: error.message,
     });
   }
 });
@@ -118,10 +115,10 @@ router.post('/', authMiddleware, async (req, res) => {
 // Get service by ID
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM services WHERE id = $1 AND user_id = $2',
-      [req.params.id, req.userId]
-    );
+    const result = await pool.query('SELECT * FROM services WHERE id = $1 AND user_id = $2', [
+      req.params.id,
+      req.userId,
+    ]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Service not found' });

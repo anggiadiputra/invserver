@@ -248,8 +248,6 @@ async function migrate() {
       END $$;
     `);
 
-
-
     // Add discount column to invoice_items if it doesn't exist
     await client.query(`
       DO $$
@@ -316,6 +314,29 @@ async function migrate() {
         END IF;
 
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'wallet_transactions' AND column_name = 'payment_url') THEN
+          ALTER TABLE wallet_transactions ADD COLUMN payment_url TEXT;
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'wallet_transactions' AND column_name = 'payment_number') THEN
+          ALTER TABLE wallet_transactions ADD COLUMN payment_method TEXT, ADD COLUMN payment_number TEXT;
+        ELSE
+          -- Ensure they are TEXT even if they exist
+          ALTER TABLE wallet_transactions ALTER COLUMN payment_method TYPE TEXT, ALTER COLUMN payment_number TYPE TEXT, ALTER COLUMN pakasir_order_id TYPE TEXT;
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'wallet_transactions' AND column_name = 'expired_at') THEN
+          ALTER TABLE wallet_transactions ADD COLUMN expired_at TIMESTAMP;
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'wallet_transactions' AND column_name = 'updated_at') THEN
+          ALTER TABLE wallet_transactions ADD COLUMN updated_at TIMESTAMP DEFAULT NOW();
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                       WHERE table_name = 'wallet_transactions' AND column_name = 'invoice_id') THEN
           ALTER TABLE wallet_transactions ADD COLUMN invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL;
         END IF;
@@ -327,7 +348,6 @@ async function migrate() {
       UPDATE invoices SET expires_at = created_at + INTERVAL '40 days'
       WHERE expires_at IS NULL;
     `);
-
 
     // Create bank_accounts table for multiple bank accounts
     await client.query(`
@@ -346,7 +366,6 @@ async function migrate() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_bank_accounts_user_id ON bank_accounts(user_id);
     `);
-
 
     // Create whatsapp_logs table for tracking sent messages
     await client.query(`
@@ -454,10 +473,11 @@ async function migrate() {
         user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         plan_id INTEGER NOT NULL REFERENCES plans(id),
         status VARCHAR(20) DEFAULT 'trial',
-        started_at TIMESTAMP DEFAULT NOW(),
-        expires_at TIMESTAMP,
-        cancelled_at TIMESTAMP,
-        created_at TIMESTAMP DEFAULT NOW()
+        started_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMPTZ,
+        cancelled_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
 
       CREATE TABLE IF NOT EXISTS user_wallets (
@@ -476,9 +496,15 @@ async function migrate() {
         amount DECIMAL(12,2) NOT NULL,
         balance_after DECIMAL(12,2) NOT NULL,
         description TEXT,
-        pakasir_order_id VARCHAR(100),
+        pakasir_order_id TEXT,
+        payment_url TEXT,
+        payment_method TEXT,
+        payment_number TEXT,
         invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+        system_invoice_id INTEGER REFERENCES system_invoices(id) ON DELETE SET NULL,
         status VARCHAR(20) DEFAULT 'completed',
+        expired_at TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT NOW(),
         created_at TIMESTAMP DEFAULT NOW()
       );
 
@@ -551,7 +577,6 @@ async function migrate() {
     `);
 
     console.log('✅ Migrations and restoration completed successfully');
-
   } catch (error) {
     console.error('❌ Migration error:', error);
     process.exit(1);

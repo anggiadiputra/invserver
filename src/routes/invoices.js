@@ -12,7 +12,7 @@ router.get('/', authMiddleware, async (req, res) => {
   try {
     const { page, limit, status, search } = req.query;
 
-    const conditions = ["i.user_id = $1", "i.invoice_type = 'regular'"];
+    const conditions = ['i.user_id = $1', "i.invoice_type = 'regular'"];
     const params = [req.userId];
     let paramIdx = 2;
 
@@ -44,13 +44,18 @@ router.get('/', authMiddleware, async (req, res) => {
            ${baseQuery} ORDER BY i.created_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
           [...params, limitNum, offset]
         ),
-        pool.query(`SELECT COUNT(*) ${baseQuery}`, params)
+        pool.query(`SELECT COUNT(*) ${baseQuery}`, params),
       ]);
 
       const total = parseInt(countResult.rows[0].count);
       return res.json({
         data: dataResult.rows,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) }
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum),
+        },
       });
     }
 
@@ -114,7 +119,17 @@ router.get('/stats/monthly', authMiddleware, async (req, res) => {
 // Create invoice
 router.post('/', authMiddleware, checkInvoiceQuota, async (req, res) => {
   try {
-    const { customer_id, invoice_number, issue_date, due_date, items, notes, show_discount, show_unit, show_tax } = req.body;
+    const {
+      customer_id,
+      invoice_number,
+      issue_date,
+      due_date,
+      items,
+      notes,
+      show_discount,
+      show_unit,
+      show_tax,
+    } = req.body;
 
     if (!customer_id || !invoice_number) {
       return res.status(400).json({ error: 'Customer and invoice number are required' });
@@ -127,7 +142,7 @@ router.post('/', authMiddleware, checkInvoiceQuota, async (req, res) => {
       // Calculate totals using utility
       const { totalAmount, taxAmount } = calculateInvoiceTotals(items, {
         show_discount: !!show_discount,
-        show_tax: !!show_tax
+        show_tax: !!show_tax,
       });
 
       // Create invoice with display preferences
@@ -135,7 +150,20 @@ router.post('/', authMiddleware, checkInvoiceQuota, async (req, res) => {
         `INSERT INTO invoices (user_id, customer_id, invoice_number, issue_date, due_date, total_amount, tax_amount, notes, status, show_discount, show_unit, show_tax)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING *`,
-        [req.userId, customer_id, invoice_number, issue_date, due_date, totalAmount, taxAmount, notes, 'draft', show_discount || false, show_unit || false, show_tax || false]
+        [
+          req.userId,
+          customer_id,
+          invoice_number,
+          issue_date,
+          due_date,
+          totalAmount,
+          taxAmount,
+          notes,
+          'draft',
+          show_discount || false,
+          show_unit || false,
+          show_tax || false,
+        ]
       );
 
       const invoice = invoiceResult.rows[0];
@@ -146,7 +174,16 @@ router.post('/', authMiddleware, checkInvoiceQuota, async (req, res) => {
           await client.query(
             `INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, tax_rate, discount, unit)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [invoice.id, item.service_id, item.description, item.quantity, item.unit_price, item.tax_rate || 0, item.discount || 0, item.unit || null]
+            [
+              invoice.id,
+              item.service_id,
+              item.description,
+              item.quantity,
+              item.unit_price,
+              item.tax_rate || 0,
+              item.discount || 0,
+              item.unit || null,
+            ]
           );
         }
       }
@@ -172,10 +209,10 @@ router.get('/:id', authMiddleware, async (req, res) => {
     let invoiceResult;
 
     if (!isNaN(identifier) && !isNaN(parseFloat(identifier))) {
-      invoiceResult = await pool.query(
-        'SELECT * FROM invoices WHERE id = $1 AND user_id = $2',
-        [identifier, req.userId]
-      );
+      invoiceResult = await pool.query('SELECT * FROM invoices WHERE id = $1 AND user_id = $2', [
+        identifier,
+        req.userId,
+      ]);
     } else {
       invoiceResult = await pool.query(
         'SELECT * FROM invoices WHERE invoice_number = $1 AND user_id = $2',
@@ -187,10 +224,9 @@ router.get('/:id', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    const itemsResult = await pool.query(
-      'SELECT * FROM invoice_items WHERE invoice_id = $1',
-      [invoiceResult.rows[0].id]
-    );
+    const itemsResult = await pool.query('SELECT * FROM invoice_items WHERE invoice_id = $1', [
+      invoiceResult.rows[0].id,
+    ]);
 
     const invoice = invoiceResult.rows[0];
     invoice.items = itemsResult.rows;
@@ -206,11 +242,15 @@ router.get('/:id', authMiddleware, async (req, res) => {
 router.patch('/:id/status', authMiddleware, async (req, res) => {
   try {
     const { status } = req.body;
+    const identifier = req.params.id;
+    let query = 'UPDATE invoices SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND user_id = $3 RETURNING *';
+    let params = [status, identifier, req.userId];
 
-    const result = await pool.query(
-      'UPDATE invoices SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND user_id = $3 RETURNING *',
-      [status, req.params.id, req.userId]
-    );
+    if (isNaN(identifier) || isNaN(parseFloat(identifier))) {
+      query = 'UPDATE invoices SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE invoice_number = $2 AND user_id = $3 RETURNING *';
+    }
+
+    const result = await pool.query(query, params);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Invoice not found' });
@@ -221,7 +261,7 @@ router.patch('/:id/status', authMiddleware, async (req, res) => {
     // Trigger automatic notifications if status is paid or sent
     if (status === 'paid' || status === 'sent') {
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      sendInvoiceNotifications(invoice.id, req.userId, frontendUrl).catch(err => {
+      sendInvoiceNotifications(invoice.id, req.userId, frontendUrl).catch((err) => {
         console.error('Failed to send auto-notifications:', err);
       });
     }
@@ -236,7 +276,18 @@ router.patch('/:id/status', authMiddleware, async (req, res) => {
 // Update invoice
 router.put('/:id', authMiddleware, async (req, res) => {
   try {
-    const { customer_id, invoice_number, issue_date, due_date, items, notes, status, show_discount, show_unit, show_tax } = req.body;
+    const {
+      customer_id,
+      invoice_number,
+      issue_date,
+      due_date,
+      items,
+      notes,
+      status,
+      show_discount,
+      show_unit,
+      show_tax,
+    } = req.body;
 
     if (!customer_id || !invoice_number) {
       return res.status(400).json({ error: 'Customer and invoice number are required' });
@@ -249,7 +300,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
       // Calculate totals using utility
       const { totalAmount, taxAmount } = calculateInvoiceTotals(items, {
         show_discount: !!show_discount,
-        show_tax: !!show_tax
+        show_tax: !!show_tax,
       });
 
       // Update invoice with display preferences
@@ -261,7 +312,21 @@ router.put('/:id', authMiddleware, async (req, res) => {
         WHERE id = $12 AND user_id = $13
         RETURNING *
       `;
-      let params = [customer_id, invoice_number, issue_date, due_date, totalAmount, taxAmount, notes, status || 'draft', show_discount || false, show_unit || false, show_tax || false, req.params.id, req.userId];
+      let params = [
+        customer_id,
+        invoice_number,
+        issue_date,
+        due_date,
+        totalAmount,
+        taxAmount,
+        notes,
+        status || 'draft',
+        show_discount || false,
+        show_unit || false,
+        show_tax || false,
+        req.params.id,
+        req.userId,
+      ];
 
       if (isNaN(req.params.id)) {
         query = `
@@ -292,7 +357,16 @@ router.put('/:id', authMiddleware, async (req, res) => {
           await client.query(
             `INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, tax_rate, discount, unit)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [invoice.id, item.service_id, item.description, item.quantity, item.unit_price, item.tax_rate || 0, item.discount || 0, item.unit || null]
+            [
+              invoice.id,
+              item.service_id,
+              item.description,
+              item.quantity,
+              item.unit_price,
+              item.tax_rate || 0,
+              item.discount || 0,
+              item.unit || null,
+            ]
           );
         }
       }
@@ -302,7 +376,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
       // Trigger automatic notifications if status is paid or sent
       if (status === 'paid' || status === 'sent') {
         const baseUrl = `${req.protocol}://${req.get('host')}`;
-        sendInvoiceNotifications(invoice.id, req.userId, baseUrl).catch(err => {
+        sendInvoiceNotifications(invoice.id, req.userId, baseUrl).catch((err) => {
           console.error('Failed to send auto-notifications:', err);
         });
       }
@@ -334,7 +408,10 @@ router.post('/batch-delete', authMiddleware, async (req, res) => {
       // Delete invoice items first (cascade handles this usually, but being safe)
       await client.query('DELETE FROM invoice_items WHERE invoice_id = ANY($1::int[])', [ids]);
       // Delete invoices
-      await client.query('DELETE FROM invoices WHERE id = ANY($1::int[]) AND user_id = $2', [ids, req.userId]);
+      await client.query('DELETE FROM invoices WHERE id = ANY($1::int[]) AND user_id = $2', [
+        ids,
+        req.userId,
+      ]);
       await client.query('COMMIT');
       res.json({ message: `${ids.length} invoices deleted successfully` });
     } catch (error) {
@@ -366,7 +443,7 @@ router.post('/batch-status', authMiddleware, async (req, res) => {
     if (status === 'paid' || status === 'sent') {
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
       for (const row of result.rows) {
-        sendInvoiceNotifications(row.id, req.userId, frontendUrl).catch(err => {
+        sendInvoiceNotifications(row.id, req.userId, frontendUrl).catch((err) => {
           console.error(`Failed auto-notify for invoice ${row.id}:`, err);
         });
       }
@@ -382,21 +459,33 @@ router.post('/batch-status', authMiddleware, async (req, res) => {
 // Delete invoice
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
+    const identifier = req.params.id;
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      // Delete invoice items first (cascade will handle this, but being explicit)
-      await client.query(
-        'DELETE FROM invoice_items WHERE invoice_id = $1',
-        [req.params.id]
-      );
+      let itemsQuery = 'DELETE FROM invoice_items WHERE invoice_id = $1';
+      let invoiceQuery = 'DELETE FROM invoices WHERE id = $1 AND user_id = $2 RETURNING *';
+      let params = [identifier];
+
+      if (isNaN(identifier) || isNaN(parseFloat(identifier))) {
+        // Resolve numeric ID first if we have a string identifier
+        const lookup = await client.query('SELECT id FROM invoices WHERE invoice_number = $1 AND user_id = $2', [identifier, req.userId]);
+        if (lookup.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'Invoice not found' });
+        }
+        const id = lookup.rows[0].id;
+        itemsQuery = 'DELETE FROM invoice_items WHERE invoice_id = $1';
+        invoiceQuery = 'DELETE FROM invoices WHERE id = $1 AND user_id = $2 RETURNING *';
+        params = [id];
+      }
+
+      // Delete invoice items first
+      await client.query(itemsQuery, params);
 
       // Delete invoice
-      const result = await client.query(
-        'DELETE FROM invoices WHERE id = $1 AND user_id = $2 RETURNING *',
-        [req.params.id, req.userId]
-      );
+      const result = await client.query(invoiceQuery, [...params, req.userId]);
 
       if (result.rows.length === 0) {
         await client.query('ROLLBACK');
