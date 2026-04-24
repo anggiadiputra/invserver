@@ -206,8 +206,11 @@ router.post('/', authMiddleware, checkInvoiceQuota, async (req, res) => {
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const identifier = req.params.id;
-    let invoiceResult;
+    let invoice;
+    let isSystem = false;
 
+    // 1. Try fetching from regular invoices first
+    let invoiceResult;
     if (!isNaN(identifier) && !isNaN(parseFloat(identifier))) {
       invoiceResult = await pool.query('SELECT * FROM invoices WHERE id = $1 AND user_id = $2', [
         identifier,
@@ -220,16 +223,56 @@ router.get('/:id', authMiddleware, async (req, res) => {
       );
     }
 
-    if (invoiceResult.rows.length === 0) {
+    if (invoiceResult.rows.length > 0) {
+      invoice = invoiceResult.rows[0];
+    } else {
+      // 2. Try fetching from system invoices if not found
+      if (!isNaN(identifier) && !isNaN(parseFloat(identifier))) {
+        invoiceResult = await pool.query('SELECT * FROM system_invoices WHERE id = $1 AND user_id = $2', [
+          identifier,
+          req.userId,
+        ]);
+      } else {
+        invoiceResult = await pool.query(
+          'SELECT * FROM system_invoices WHERE invoice_number = $1 AND user_id = $2',
+          [identifier, req.userId]
+        );
+      }
+
+      if (invoiceResult.rows.length > 0) {
+        invoice = invoiceResult.rows[0];
+        isSystem = true;
+      }
+    }
+
+    if (!invoice) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    const itemsResult = await pool.query('SELECT * FROM invoice_items WHERE invoice_id = $1', [
-      invoiceResult.rows[0].id,
+    // 3. Fetch items based on table type
+    const itemsTable = isSystem ? 'system_invoice_items' : 'invoice_items';
+    const fkCol = isSystem ? 'system_invoice_id' : 'invoice_id';
+    
+    const itemsResult = await pool.query(`SELECT * FROM ${itemsTable} WHERE ${fkCol} = $1`, [
+      invoice.id,
     ]);
 
-    const invoice = invoiceResult.rows[0];
-    invoice.items = itemsResult.rows;
+    // Normalize items for system invoices to match regular invoice items structure
+    invoice.items = itemsResult.rows.map(item => {
+      if (isSystem) {
+        return {
+          ...item,
+          quantity: 1,
+          unit_price: item.amount,
+          unit: 'pcs',
+          discount: 0,
+          tax_rate: 0
+        };
+      }
+      return item;
+    });
+    
+    invoice.is_system = isSystem;
 
     res.json(invoice);
   } catch (error) {
@@ -276,6 +319,7 @@ router.patch('/:id/status', authMiddleware, async (req, res) => {
 // Update invoice
 router.put('/:id', authMiddleware, async (req, res) => {
   try {
+    const identifier = req.params.id;
     const {
       customer_id,
       invoice_number,
@@ -287,101 +331,128 @@ router.put('/:id', authMiddleware, async (req, res) => {
       show_discount,
       show_unit,
       show_tax,
+      total_amount,
+      tax_amount
     } = req.body;
-
-    if (!customer_id || !invoice_number) {
-      return res.status(400).json({ error: 'Customer and invoice number are required' });
-    }
 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      // Calculate totals using utility
-      const { totalAmount, taxAmount } = calculateInvoiceTotals(items, {
-        show_discount: !!show_discount,
-        show_tax: !!show_tax,
-      });
+      // 1. Resolve which table to update
+      let isSystem = false;
+      let targetId = null;
 
-      // Update invoice with display preferences
-      let query = `
-        UPDATE invoices 
-        SET customer_id = $1, invoice_number = $2, issue_date = $3, due_date = $4, 
-            total_amount = $5, tax_amount = $6, notes = $7, status = $8, updated_at = CURRENT_TIMESTAMP,
-            show_discount = $9, show_unit = $10, show_tax = $11
-        WHERE id = $12 AND user_id = $13
-        RETURNING *
-      `;
-      let params = [
-        customer_id,
-        invoice_number,
-        issue_date,
-        due_date,
-        totalAmount,
-        taxAmount,
-        notes,
-        status || 'draft',
-        show_discount || false,
-        show_unit || false,
-        show_tax || false,
-        req.params.id,
-        req.userId,
-      ];
+      // Check regular invoices first
+      let checkRes = await client.query(
+        'SELECT id FROM invoices WHERE (id::text = $1 OR invoice_number = $1) AND user_id = $2',
+        [identifier, req.userId]
+      );
 
-      if (isNaN(req.params.id)) {
-        query = `
-          UPDATE invoices 
-          SET customer_id = $1, invoice_number = $2, issue_date = $3, due_date = $4, 
-              total_amount = $5, tax_amount = $6, notes = $7, status = $8, updated_at = CURRENT_TIMESTAMP,
-              show_discount = $9, show_unit = $10, show_tax = $11
-          WHERE invoice_number = $12 AND user_id = $13
-          RETURNING *
-        `;
+      if (checkRes.rows.length > 0) {
+        targetId = checkRes.rows[0].id;
+      } else {
+        // Check system invoices
+        checkRes = await client.query(
+          'SELECT id FROM system_invoices WHERE (id::text = $1 OR invoice_number = $1) AND user_id = $2',
+          [identifier, req.userId]
+        );
+        if (checkRes.rows.length > 0) {
+          targetId = checkRes.rows[0].id;
+          isSystem = true;
+        }
       }
 
-      const invoiceResult = await client.query(query, params);
-
-      if (invoiceResult.rows.length === 0) {
+      if (!targetId) {
         await client.query('ROLLBACK');
         return res.status(404).json({ error: 'Invoice not found' });
       }
 
-      const invoice = invoiceResult.rows[0];
+      let finalInvoice;
 
-      // Delete old items
-      await client.query('DELETE FROM invoice_items WHERE invoice_id = $1', [invoice.id]);
+      if (isSystem) {
+        // Update System Invoice
+        const result = await client.query(
+          `UPDATE system_invoices 
+           SET invoice_number = $1, issue_date = $2, total_amount = $3, status = $4, notes = $5, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $6 AND user_id = $7
+           RETURNING *`,
+          [invoice_number, issue_date, total_amount, status, notes, targetId, req.userId]
+        );
+        finalInvoice = result.rows[0];
 
-      // Create new items
-      if (items && items.length > 0) {
-        for (const item of items) {
+        // Update items (for system invoices, we just update the first item or recreate)
+        await client.query('DELETE FROM system_invoice_items WHERE system_invoice_id = $1', [targetId]);
+        if (items && items.length > 0) {
           await client.query(
-            `INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, tax_rate, discount, unit)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [
-              invoice.id,
-              item.service_id,
-              item.description,
-              item.quantity,
-              item.unit_price,
-              item.tax_rate || 0,
-              item.discount || 0,
-              item.unit || null,
-            ]
+            'INSERT INTO system_invoice_items (system_invoice_id, description, amount) VALUES ($1, $2, $3)',
+            [targetId, items[0].description, items[0].unit_price]
           );
+        }
+      } else {
+        // Update Regular Invoice
+        const result = await client.query(
+          `UPDATE invoices 
+           SET customer_id = $1, invoice_number = $2, issue_date = $3, due_date = $4, 
+               total_amount = $5, tax_amount = $6, notes = $7, status = $8, updated_at = CURRENT_TIMESTAMP,
+               show_discount = $9, show_unit = $10, show_tax = $11
+           WHERE id = $12 AND user_id = $13
+           RETURNING *`,
+          [
+            customer_id,
+            invoice_number,
+            issue_date,
+            due_date,
+            total_amount,
+            tax_amount,
+            notes,
+            status || 'draft',
+            show_discount || false,
+            show_unit || false,
+            show_tax || false,
+            targetId,
+            req.userId
+          ]
+        );
+        finalInvoice = result.rows[0];
+
+        // Delete old items
+        await client.query('DELETE FROM invoice_items WHERE invoice_id = $1', [targetId]);
+
+        // Create new items
+        if (items && items.length > 0) {
+          for (const item of items) {
+            await client.query(
+              `INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, tax_rate, discount, unit)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              [
+                targetId,
+                item.service_id,
+                item.description,
+                item.quantity,
+                item.unit_price,
+                item.tax_rate || 0,
+                item.discount || 0,
+                item.unit || null,
+              ]
+            );
+          }
         }
       }
 
       await client.query('COMMIT');
 
-      // Trigger automatic notifications if status is paid or sent
+      // Trigger automatic notifications
       if (status === 'paid' || status === 'sent') {
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-        sendInvoiceNotifications(invoice.id, req.userId, baseUrl).catch((err) => {
-          console.error('Failed to send auto-notifications:', err);
-        });
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        if (isSystem) {
+           sendSystemInvoiceNotifications(targetId, req.userId, frontendUrl).catch(console.error);
+        } else {
+           sendInvoiceNotifications(targetId, req.userId, frontendUrl).catch(console.error);
+        }
       }
 
-      res.json(invoice);
+      res.json(finalInvoice);
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
