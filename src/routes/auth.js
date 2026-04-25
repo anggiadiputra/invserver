@@ -168,7 +168,9 @@ router.post(
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: process.env.NODE_ENV === 'production' ? 'lax' : 'strict',
+      domain: process.env.NODE_ENV === 'production' ? '.diurusin.id' : undefined,
+      path: '/',
     });
 
     res.json({
@@ -372,8 +374,11 @@ router.post(
 
 // Logout
 router.post('/logout', (req, res) => {
-  res.clearCookie('token');
-  res.json({ success: true, message: 'Logged out successfully' });
+  res.clearCookie('token', {
+    domain: process.env.NODE_ENV === 'production' ? '.diurusin.id' : undefined,
+    path: '/',
+  });
+  res.json({ message: 'Logged out successfully' });
 });
 
 // Sync Neon Identity (Triggers authMiddleware's Path A linking logic)
