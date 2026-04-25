@@ -8,8 +8,18 @@ import emailService from '../services/email.js';
 import { verifyTurnstileToken } from '../utils/turnstile.js';
 import catchAsync from '../utils/catchAsync.js';
 import AppError from '../utils/AppError.js';
+import { rateLimit } from 'express-rate-limit';
 
 const router = express.Router();
+
+// Stricter rate limiter for auth actions (Brute-force protection)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Limit each IP to 10 attempts per window
+  message: { error: 'Terlalu banyak percobaan. Silakan coba lagi dalam 15 menit.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Validation middleware
 const validateEmail = body('email').isEmail().normalizeEmail({ gmail_remove_dots: false });
@@ -19,6 +29,7 @@ const validateName = [body('firstName').trim().notEmpty(), body('lastName').trim
 // Register
 router.post(
   '/register',
+  authLimiter,
   validateEmail,
   validatePassword,
   ...validateName,
@@ -106,6 +117,7 @@ router.post(
 // Login
 router.post(
   '/login',
+  authLimiter,
   validateEmail,
   validatePassword,
   catchAsync(async (req, res, next) => {
@@ -246,6 +258,7 @@ router.get(
 // Forgot Password
 router.post(
   '/forgot-password',
+  authLimiter,
   validateEmail,
   catchAsync(async (req, res, next) => {
     const errors = validationResult(req);

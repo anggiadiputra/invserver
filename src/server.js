@@ -2,6 +2,8 @@ import dotenv from 'dotenv';
 dotenv.config();
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import { rateLimit } from 'express-rate-limit';
 import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customers.js';
 import serviceRoutes from './routes/services.js';
@@ -22,6 +24,21 @@ import AppError from './utils/AppError.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// --- Security Middleware ---
+app.use(helmet()); // Sets security headers
+
+// Global Rate Limiting
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200, // Limit each IP to 200 requests per windowMs
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  message: { error: 'Too many requests from this IP, please try again after 15 minutes' }
+});
+
+// Apply rate limiter to all API routes
+app.use('/api', globalLimiter);
 
 // Middleware
 const allowedOrigins = [

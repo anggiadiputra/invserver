@@ -29,7 +29,12 @@ async function getPakasirInstance() {
 // Get wallet balance and transaction history (User)
 router.get('/', authMiddleware, async (req, res) => {
   try {
-    const data = await WalletService.getWalletData(req.userId);
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.search || '';
+    const offset = (page - 1) * limit;
+
+    const data = await WalletService.getWalletData(req.userId, page, limit, search);
     res.json(data);
   } catch (error) {
     console.error('Error fetching wallet data:', error);
@@ -40,6 +45,27 @@ router.get('/', authMiddleware, async (req, res) => {
 // Admin: Get all transactions
 router.get('/all-transactions', authMiddleware, adminOnly, async (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.search || '';
+    const offset = (page - 1) * limit;
+
+    let queryParams = [limit, offset];
+    let whereClause = '';
+
+    if (search) {
+      whereClause = `
+        WHERE u.email ILIKE $3 
+           OR u.first_name ILIKE $3 
+           OR u.last_name ILIKE $3 
+           OR wt.description ILIKE $3 
+           OR wt.pakasir_order_id ILIKE $3
+           OR i.invoice_number ILIKE $3
+           OR si.invoice_number ILIKE $3
+      `;
+      queryParams.push(`%${search}%`);
+    }
+
     const history = await pool.query(`
       SELECT wt.*, u.email, u.first_name, u.last_name,
              COALESCE(i.invoice_number, si.invoice_number) as invoice_number
@@ -47,10 +73,26 @@ router.get('/all-transactions', authMiddleware, adminOnly, async (req, res) => {
       JOIN users u ON wt.user_id = u.id 
       LEFT JOIN invoices i ON wt.invoice_id = i.id
       LEFT JOIN system_invoices si ON wt.system_invoice_id = si.id
+      ${whereClause}
       ORDER BY wt.created_at DESC 
-      LIMIT 200
-    `);
-    res.json(history.rows);
+      LIMIT $1 OFFSET $2
+    `, queryParams);
+
+    const countRes = await pool.query(`
+      SELECT COUNT(*) 
+      FROM wallet_transactions wt 
+      JOIN users u ON wt.user_id = u.id 
+      LEFT JOIN invoices i ON wt.invoice_id = i.id
+      LEFT JOIN system_invoices si ON wt.system_invoice_id = si.id
+      ${whereClause}
+    `, search ? [`%${search}%`] : []);
+
+    res.json({
+      transactions: history.rows,
+      total: parseInt(countRes.rows[0].count),
+      page,
+      limit
+    });
   } catch (error) {
     console.error('Error fetching all transactions:', error);
     res.status(500).json({ error: 'Failed to fetch overall transaction history' });
@@ -93,6 +135,20 @@ router.post('/manual-adjust', authMiddleware, adminOnly, async (req, res) => {
         parseFloat(amount),
         `Top-up Saldo (Admin Adjust): ${description}`,
         `ADJ-${Date.now()}`
+      ).catch(console.error);
+    } else if (type === 'refund') {
+      newBalance = await WalletService.addBalance(
+        userId,
+        parseFloat(amount),
+        `[Admin Refund] ${description}`
+      );
+      // Generate system invoice for REFUND
+      generateSystemInvoice(
+        userId,
+        'refund',
+        parseFloat(amount),
+        `Refund Saldo: ${description}`,
+        `REF-${Date.now()}`
       ).catch(console.error);
     } else if (type === 'deduction') {
       const refId = `ADJ-${Date.now()}`;

@@ -206,21 +206,24 @@ router.post('/', authMiddleware, checkInvoiceQuota, async (req, res) => {
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const identifier = req.params.id;
+    const isAdmin = req.userRole === 'admin';
     let invoice;
     let isSystem = false;
 
     // 1. Try fetching from regular invoices first
     let invoiceResult;
     if (!isNaN(identifier) && !isNaN(parseFloat(identifier))) {
-      invoiceResult = await pool.query('SELECT * FROM invoices WHERE id = $1 AND user_id = $2', [
-        identifier,
-        req.userId,
-      ]);
+      const query = isAdmin 
+        ? 'SELECT * FROM invoices WHERE id = $1' 
+        : 'SELECT * FROM invoices WHERE id = $1 AND user_id = $2';
+      const params = isAdmin ? [identifier] : [identifier, req.userId];
+      invoiceResult = await pool.query(query, params);
     } else {
-      invoiceResult = await pool.query(
-        'SELECT * FROM invoices WHERE invoice_number = $1 AND user_id = $2',
-        [identifier, req.userId]
-      );
+      const query = isAdmin 
+        ? 'SELECT * FROM invoices WHERE invoice_number = $1' 
+        : 'SELECT * FROM invoices WHERE invoice_number = $1 AND user_id = $2';
+      const params = isAdmin ? [identifier] : [identifier, req.userId];
+      invoiceResult = await pool.query(query, params);
     }
 
     if (invoiceResult.rows.length > 0) {
@@ -228,15 +231,17 @@ router.get('/:id', authMiddleware, async (req, res) => {
     } else {
       // 2. Try fetching from system invoices if not found
       if (!isNaN(identifier) && !isNaN(parseFloat(identifier))) {
-        invoiceResult = await pool.query('SELECT * FROM system_invoices WHERE id = $1 AND user_id = $2', [
-          identifier,
-          req.userId,
-        ]);
+        const query = isAdmin 
+          ? 'SELECT * FROM system_invoices WHERE id = $1' 
+          : 'SELECT * FROM system_invoices WHERE id = $1 AND user_id = $2';
+        const params = isAdmin ? [identifier] : [identifier, req.userId];
+        invoiceResult = await pool.query(query, params);
       } else {
-        invoiceResult = await pool.query(
-          'SELECT * FROM system_invoices WHERE invoice_number = $1 AND user_id = $2',
-          [identifier, req.userId]
-        );
+        const query = isAdmin 
+          ? 'SELECT * FROM system_invoices WHERE invoice_number = $1' 
+          : 'SELECT * FROM system_invoices WHERE invoice_number = $1 AND user_id = $2';
+        const params = isAdmin ? [identifier] : [identifier, req.userId];
+        invoiceResult = await pool.query(query, params);
       }
 
       if (invoiceResult.rows.length > 0) {

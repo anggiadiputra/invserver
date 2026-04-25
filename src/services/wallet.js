@@ -238,10 +238,20 @@ export class WalletService {
   /**
    * Gets the wallet balance and history for a user.
    */
-  static async getWalletData(userId) {
+  static async getWalletData(userId, page = 1, limit = 10, search = '') {
+    const offset = (page - 1) * limit;
+    
     const wallet = await pool.query('SELECT balance FROM user_wallets WHERE user_id = $1', [
       userId,
     ]);
+
+    let queryParams = [userId, limit, offset];
+    let whereClause = 'WHERE wt.user_id = $1';
+
+    if (search) {
+      whereClause += ` AND (wt.description ILIKE $4 OR i.invoice_number ILIKE $4 OR si.invoice_number ILIKE $4)`;
+      queryParams.push(`%${search}%`);
+    }
     
     const history = await pool.query(
       `SELECT wt.*, 
@@ -249,15 +259,27 @@ export class WalletService {
        FROM wallet_transactions wt 
        LEFT JOIN invoices i ON wt.invoice_id = i.id
        LEFT JOIN system_invoices si ON wt.system_invoice_id = si.id
-       WHERE wt.user_id = $1 
+       ${whereClause}
        ORDER BY wt.created_at DESC 
-       LIMIT 50`,
-      [userId]
+       LIMIT $2 OFFSET $3`,
+      queryParams
+    );
+
+    const countRes = await pool.query(
+      `SELECT COUNT(*) 
+       FROM wallet_transactions wt 
+       LEFT JOIN invoices i ON wt.invoice_id = i.id
+       LEFT JOIN system_invoices si ON wt.system_invoice_id = si.id
+       ${whereClause}`,
+      search ? [userId, `%${search}%`] : [userId]
     );
 
     return {
       balance: wallet.rows[0]?.balance || 0,
       history: history.rows,
+      total: parseInt(countRes.rows[0].count),
+      page,
+      limit
     };
   }
 }
