@@ -33,22 +33,31 @@ const allowedOrigins = [
   'http://127.0.0.1:5173',
   'https://app.diurusin.id',
   process.env.FRONTEND_URL,
-].filter(Boolean);
+]
+  .filter(Boolean)
+  .map(url => url.replace(/\/$/, '')); // Remove trailing slashes
 
 // CORS must be the first middleware to handle OPTIONS preflight correctly
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl requests)
       if (!origin) return callback(null, true);
-      if (allowedOrigins.indexOf(origin) !== -1 || /^http:\/\/localhost:\d+$/.test(origin)) {
+      
+      const normalizedOrigin = origin.replace(/\/$/, '');
+      const isAllowed = allowedOrigins.includes(normalizedOrigin) || 
+                       /^http:\/\/localhost:\d+$/.test(normalizedOrigin);
+      
+      if (isAllowed) {
         callback(null, true);
       } else {
-        // Don't throw an error, just return false (no CORS headers)
+        // Log origin mismatch in dev/logs if possible (not here, but logic-wise)
         callback(null, false);
       }
     },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'x-csrf-token'],
+    exposedHeaders: ['set-cookie'],
   })
 );
 
