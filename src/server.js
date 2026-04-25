@@ -2,7 +2,6 @@ import dotenv from 'dotenv';
 dotenv.config();
 import express from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customers.js';
@@ -25,13 +24,7 @@ import AppError from './utils/AppError.js';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// --- Security Middleware ---
-app.use(
-  helmet({
-    contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false,
-  })
-);
+
 
 // Global Rate Limiting
 const globalLimiter = rateLimit({
