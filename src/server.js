@@ -26,7 +26,19 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // --- Security Middleware ---
-app.use(helmet()); // Sets security headers
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        "script-src": ["'self'", "'unsafe-inline'", "https://challenges.cloudflare.com"],
+        "frame-src": ["'self'", "https://challenges.cloudflare.com"],
+        "connect-src": ["'self'", "https://challenges.cloudflare.com"],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+  })
+);
 
 // Global Rate Limiting
 const globalLimiter = rateLimit({
