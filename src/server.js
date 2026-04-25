@@ -24,7 +24,35 @@ import AppError from './utils/AppError.js';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Trust Vercel's proxy for accurate IP tracking (crucial for rate limiting)
+app.set('trust proxy', 1);
 
+// Middleware
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'https://app.diurusin.id',
+  process.env.FRONTEND_URL,
+].filter(Boolean);
+
+// CORS must be the first middleware to handle OPTIONS preflight correctly
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.indexOf(origin) !== -1 || /^http:\/\/localhost:\d+$/.test(origin)) {
+        callback(null, true);
+      } else {
+        // Don't throw an error, just return false (no CORS headers)
+        callback(null, false);
+      }
+    },
+    credentials: true,
+  })
+);
+
+app.use(express.json());
 
 // Global Rate Limiting
 const globalLimiter = rateLimit({
@@ -37,32 +65,6 @@ const globalLimiter = rateLimit({
 
 // Apply rate limiter to all API routes
 app.use('/api', globalLimiter);
-
-// Middleware
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'https://app.diurusin.id',
-  process.env.FRONTEND_URL,
-].filter(Boolean);
-
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl requests)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.indexOf(origin) !== -1 || /^http:\/\/localhost:\d+$/.test(origin)) {
-        callback(null, true);
-      } else {
-        // Don't throw an error, just return false (no CORS headers)
-        // This prevents Express from catching an error and returning a 500
-        callback(null, false);
-      }
-    },
-    credentials: true,
-  })
-);
-app.use(express.json());
 
 // Health check
 app.get('/health', (req, res) => {
