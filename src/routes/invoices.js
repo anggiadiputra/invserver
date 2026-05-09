@@ -2,7 +2,7 @@ import express from 'express';
 import pool from '../db/pool.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { checkInvoiceQuota } from '../middleware/checkQuota.js';
-import { sendInvoiceNotifications } from '../utils/notifications.js';
+import { sendInvoiceNotifications, sendSystemInvoiceNotifications } from '../utils/notifications.js';
 import { calculateInvoiceTotals } from '../utils/calculations.js';
 
 const router = express.Router();
@@ -336,8 +336,6 @@ router.put('/:id', authMiddleware, async (req, res) => {
       show_discount,
       show_unit,
       show_tax,
-      total_amount,
-      tax_amount
     } = req.body;
 
     const client = await pool.connect();
@@ -373,6 +371,12 @@ router.put('/:id', authMiddleware, async (req, res) => {
         return res.status(404).json({ error: 'Invoice not found' });
       }
 
+      // Calculate totals using utility
+      const { totalAmount, taxAmount } = calculateInvoiceTotals(items || [], {
+        show_discount: !!show_discount,
+        show_tax: !!show_tax,
+      });
+
       let finalInvoice;
 
       if (isSystem) {
@@ -382,7 +386,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
            SET invoice_number = $1, issue_date = $2, total_amount = $3, status = $4, notes = $5, updated_at = CURRENT_TIMESTAMP
            WHERE id = $6 AND user_id = $7
            RETURNING *`,
-          [invoice_number, issue_date, total_amount, status, notes, targetId, req.userId]
+          [invoice_number, issue_date, totalAmount, status, notes, targetId, req.userId]
         );
         finalInvoice = result.rows[0];
 
@@ -408,8 +412,8 @@ router.put('/:id', authMiddleware, async (req, res) => {
             invoice_number,
             issue_date,
             due_date,
-            total_amount,
-            tax_amount,
+            totalAmount,
+            taxAmount,
             notes,
             status || 'draft',
             show_discount || false,
