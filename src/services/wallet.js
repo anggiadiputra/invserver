@@ -131,6 +131,11 @@ export class WalletService {
    * (Direct version, used for manual adjustments etc.)
    */
   static async addBalance(userId, amount, description, pakasirOrderId = null) {
+    const parsedAmount = Number(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      throw new Error('INVALID_AMOUNT');
+    }
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -148,7 +153,7 @@ export class WalletService {
           updated_at = CURRENT_TIMESTAMP
         RETURNING balance
       `,
-        [userId, amount]
+        [userId, parsedAmount]
       );
 
       const newBalance = result.rows[0].balance;
@@ -159,7 +164,7 @@ export class WalletService {
         INSERT INTO wallet_transactions (user_id, type, amount, balance_after, description, pakasir_order_id, status)
         VALUES ($1, 'deposit', $2, $3, $4, $5, 'completed')
       `,
-        [userId, amount, newBalance, description, pakasirOrderId]
+        [userId, parsedAmount, newBalance, description, pakasirOrderId]
       );
 
       await client.query('COMMIT');
@@ -184,6 +189,11 @@ export class WalletService {
    * @throws {Error} - If balance is insufficient.
    */
   static async deductBalance(userId, amount, description, referenceId = null) {
+    const parsedAmount = Number(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      throw new Error('INVALID_AMOUNT');
+    }
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -200,11 +210,11 @@ export class WalletService {
 
       const currentBalance = parseFloat(walletResult.rows[0].balance);
 
-      if (currentBalance < amount) {
+      if (currentBalance < parsedAmount) {
         throw new Error('INSUFFICIENT_BALANCE');
       }
 
-      const newBalance = currentBalance - amount;
+      const newBalance = currentBalance - parsedAmount;
 
       // 2. Update balance
       await client.query(
@@ -218,7 +228,7 @@ export class WalletService {
         INSERT INTO wallet_transactions (user_id, type, amount, balance_after, description, pakasir_order_id, status)
         VALUES ($1, 'deduction', $2, $3, $4, $5, 'completed')
       `,
-        [userId, -amount, newBalance, description, referenceId]
+        [userId, -parsedAmount, newBalance, description, referenceId]
       );
 
       await client.query('COMMIT');

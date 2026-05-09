@@ -1,5 +1,17 @@
-import request from 'supertest';
-import app from '../src/server.js';
+import { describe, expect, it, jest } from '@jest/globals';
+
+const mockPool = {
+  query: jest.fn(),
+  connect: jest.fn(),
+};
+
+jest.unstable_mockModule('../src/db/pool.js', () => ({
+  __esModule: true,
+  default: mockPool,
+}));
+
+const request = (await import('supertest')).default;
+const { default: app } = await import('../src/server.js');
 
 describe('GET /health', () => {
   it('should return 200 OK', async () => {

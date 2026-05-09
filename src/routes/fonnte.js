@@ -5,6 +5,11 @@ import fonnteService from '../services/fonnte.js';
 
 const router = express.Router();
 
+async function resolveFonnteToken() {
+  const systemResult = await pool.query('SELECT fonnte_token FROM system_settings LIMIT 1');
+  return systemResult.rows[0]?.fonnte_token || null;
+}
+
 /**
  * POST /api/fonnte/test-connection
  * Test Fonnte API connection with token
@@ -71,18 +76,13 @@ router.post('/validate-number', authMiddleware, async (req, res) => {
       });
     }
 
-    // Get global Fonnte token from system settings
-    const systemResult = await pool.query('SELECT fonnte_token FROM system_settings LIMIT 1');
-
-    if (systemResult.rows.length === 0 || !systemResult.rows[0].fonnte_token) {
+    const token = await resolveFonnteToken();
+    if (!token) {
       return res.status(400).json({
         success: false,
         message: 'Fonnte token not configured by administrator.',
       });
     }
-
-    const token = systemResult.rows[0].fonnte_token;
-
     console.log('Validating phone number:', target, 'by user:', req.userId);
 
     const result = await fonnteService.validateNumber(token, target, countryCode);
@@ -125,18 +125,13 @@ router.post('/send', authMiddleware, async (req, res) => {
       });
     }
 
-    // Get global Fonnte token from system settings
-    const systemResult = await pool.query('SELECT fonnte_token FROM system_settings LIMIT 1');
-
-    if (systemResult.rows.length === 0 || !systemResult.rows[0].fonnte_token) {
+    const token = await resolveFonnteToken();
+    if (!token) {
       return res.status(400).json({
         success: false,
         message: 'Fonnte token not configured by administrator.',
       });
     }
-
-    const token = systemResult.rows[0].fonnte_token;
-
     console.log('Sending WhatsApp message to:', target, 'by user:', req.userId);
 
     let result;
@@ -144,7 +139,15 @@ router.post('/send', authMiddleware, async (req, res) => {
     // Determine which method to use based on parameters
     if (buttonJSON) {
       // Send with interactive buttons
-      const buttonData = JSON.parse(buttonJSON);
+      let buttonData;
+      try {
+        buttonData = JSON.parse(buttonJSON);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid buttonJSON format',
+        });
+      }
       result = await fonnteService.sendWithButton({
         token,
         target,
@@ -155,7 +158,15 @@ router.post('/send', authMiddleware, async (req, res) => {
       });
     } else if (templateJSON) {
       // Send with template
-      const templateData = JSON.parse(templateJSON);
+      let templateData;
+      try {
+        templateData = JSON.parse(templateJSON);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid templateJSON format',
+        });
+      }
       result = await fonnteService.sendWithTemplate({
         token,
         target,
@@ -166,7 +177,15 @@ router.post('/send', authMiddleware, async (req, res) => {
       });
     } else if (listJSON) {
       // Send with list
-      const listData = JSON.parse(listJSON);
+      let listData;
+      try {
+        listData = JSON.parse(listJSON);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid listJSON format',
+        });
+      }
       result = await fonnteService.sendWithList({
         token,
         target,
@@ -249,17 +268,13 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
       });
     }
 
-    // Get global Fonnte token from system settings
-    const systemResult = await pool.query('SELECT fonnte_token FROM system_settings LIMIT 1');
-
-    if (systemResult.rows.length === 0 || !systemResult.rows[0].fonnte_token) {
+    const token = await resolveFonnteToken();
+    if (!token) {
       return res.status(400).json({
         success: false,
         message: 'Fonnte token not configured by administrator.',
       });
     }
-
-    const token = systemResult.rows[0].fonnte_token;
 
     // Fetch invoice data
     const invoiceResult = await pool.query(
@@ -427,8 +442,8 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
  */
 router.get('/logs', authMiddleware, async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 15;
-    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 15, 100); // Max 100
+    const page = Math.max(parseInt(req.query.page) || 1, 1); // Min 1
     const offset = (page - 1) * limit;
 
     const countResult = await pool.query('SELECT COUNT(*) FROM whatsapp_logs WHERE user_id = $1', [
@@ -468,13 +483,17 @@ router.get('/logs', authMiddleware, async (req, res) => {
 router.get('/logs/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
+    const parsedId = parseInt(id);
+    if (isNaN(parsedId) || parsedId <= 0) {
+      return res.status(400).json({ error: 'Invalid log ID' });
+    }
     const result = await pool.query(
       `SELECT wl.*, i.invoice_number, c.name as customer_name
        FROM whatsapp_logs wl
        LEFT JOIN invoices i ON wl.invoice_id = i.id
        LEFT JOIN customers c ON i.customer_id = c.id
        WHERE wl.id = $1 AND wl.user_id = $2`,
-      [id, req.userId]
+      [parsedId, req.userId]
     );
 
     if (result.rows.length === 0) {
@@ -492,16 +511,21 @@ router.get('/logs/:id', authMiddleware, async (req, res) => {
 router.post('/logs/batch-delete', authMiddleware, async (req, res) => {
   try {
     const { ids } = req.body;
-    if (!Array.isArray(ids) || ids.length === 0) {
-      return res.status(400).json({ error: 'Valid IDs array is required' });
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > 100) {
+      return res.status(400).json({ error: 'Valid IDs array is required (max 100)' });
+    }
+
+    const parsedIds = ids.map(id => parseInt(id)).filter(id => !isNaN(id) && id > 0);
+    if (parsedIds.length !== ids.length) {
+      return res.status(400).json({ error: 'All IDs must be positive integers' });
     }
 
     await pool.query('DELETE FROM whatsapp_logs WHERE id = ANY($1::int[]) AND user_id = $2', [
-      ids,
+      parsedIds,
       req.userId,
     ]);
 
-    res.json({ message: `${ids.length} WhatsApp logs deleted successfully` });
+    res.json({ message: `${parsedIds.length} WhatsApp logs deleted successfully` });
   } catch (error) {
     console.error('Error batch deleting WhatsApp logs:', error);
     res.status(500).json({ error: 'Failed to batch delete WhatsApp logs' });

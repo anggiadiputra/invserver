@@ -7,13 +7,23 @@ import emailService from '../services/email.js';
  * Daily Billing Job
  * Runs every day at 00:01 AM
  */
+let billingTask = null;
+
 export const initBillingJob = () => {
   // '1 0 * * *' = Minute 1, Hour 0, every day
-  cron.schedule('1 0 * * *', async () => {
+  billingTask = cron.schedule('1 0 * * *', async () => {
     console.log('[BillingJob] Starting daily subscription check...');
     await processSubscriptions();
     console.log('[BillingJob] Daily check completed.');
   });
+  return billingTask;
+};
+
+export const stopBillingJob = () => {
+  if (billingTask) {
+    billingTask.stop();
+    billingTask = null;
+  }
 };
 
 async function processSubscriptions() {

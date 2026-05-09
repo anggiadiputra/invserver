@@ -10,15 +10,26 @@ types.setTypeParser(1114, (stringValue) => {
   return new Date(stringValue.replace(' ', 'T') + 'Z');
 });
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
-});
+const pool = process.env.NODE_ENV === 'test'
+  ? {
+      query: async () => ({ rows: [] }),
+      connect: async () => ({
+        query: async () => ({ rows: [] }),
+        release: () => {},
+      }),
+      on: () => {},
+    }
+  : new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: {
+        rejectUnauthorized: false,
+      },
+    });
 
-pool.on('error', (err) => {
-  console.error('Unexpected error on idle client', err);
-});
+if (process.env.NODE_ENV !== 'test') {
+  pool.on('error', (err) => {
+    console.error('Unexpected error on idle client', err);
+  });
+}
 
 export default pool;

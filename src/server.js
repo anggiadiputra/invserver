@@ -95,8 +95,10 @@ app.use('/api/wallet', walletRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/plans', plansRoutes);
 
-// Start billing job
-initBillingJob();
+// Start billing job only when not running tests.
+if (process.env.NODE_ENV !== 'test') {
+  initBillingJob();
+}
 
 // Public invoice redirect (redirect backend links to frontend)
 app.get('/public/invoice/:id', (req, res) => {
@@ -112,8 +114,15 @@ app.all('*', (req, res, next) => {
 // Global Error handler
 app.use(errorHandler);
 
-// Only listen if not running as a Vercel serverless function
-if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+// Only listen when running as the real server process.
+// In test environments, the app is imported directly and should not start a listener.
+if (
+  process.env.NODE_ENV !== 'production' &&
+  !process.env.VERCEL &&
+  !process.env.JEST_WORKER_ID &&
+  process.argv[1] &&
+  process.argv[1].endsWith('src/server.js')
+) {
   app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
   });

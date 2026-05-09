@@ -26,11 +26,16 @@ async function getPakasirInstance() {
   });
 }
 
+function parseAmount(value) {
+  const parsed = parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 // Get wallet balance and transaction history (User)
 router.get('/', authMiddleware, async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const limit = Math.min(parseInt(req.query.limit) || 10, 100); // Max 100
     const search = req.query.search || '';
     const offset = (page - 1) * limit;
 
@@ -45,26 +50,28 @@ router.get('/', authMiddleware, async (req, res) => {
 // Admin: Get all transactions
 router.get('/all-transactions', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const limit = Math.min(parseInt(req.query.limit) || 10, 100);
     const search = req.query.search || '';
     const offset = (page - 1) * limit;
 
-    let queryParams = [limit, offset];
+    let queryParams = [];
     let whereClause = '';
 
     if (search) {
       whereClause = `
-        WHERE u.email ILIKE $3 
-           OR u.first_name ILIKE $3 
-           OR u.last_name ILIKE $3 
-           OR wt.description ILIKE $3 
-           OR wt.pakasir_order_id ILIKE $3
-           OR i.invoice_number ILIKE $3
-           OR si.invoice_number ILIKE $3
+        WHERE u.email ILIKE $1 
+           OR u.first_name ILIKE $1 
+           OR u.last_name ILIKE $1 
+           OR wt.description ILIKE $1 
+           OR wt.pakasir_order_id ILIKE $1
+           OR i.invoice_number ILIKE $1
+           OR si.invoice_number ILIKE $1
       `;
       queryParams.push(`%${search}%`);
     }
+
+    queryParams.push(limit, offset);
 
     const history = await pool.query(`
       SELECT wt.*, u.email, u.first_name, u.last_name,
@@ -75,7 +82,7 @@ router.get('/all-transactions', authMiddleware, adminOnly, async (req, res) => {
       LEFT JOIN system_invoices si ON wt.system_invoice_id = si.id
       ${whereClause}
       ORDER BY wt.created_at DESC 
-      LIMIT $1 OFFSET $2
+      LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}
     `, queryParams);
 
     const countRes = await pool.query(`
@@ -121,32 +128,37 @@ router.post('/manual-adjust', authMiddleware, adminOnly, async (req, res) => {
         });
     }
 
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ error: 'Amount must be a positive number' });
+    }
+
     let newBalance;
     if (type === 'deposit') {
       newBalance = await WalletService.addBalance(
         userId,
-        parseFloat(amount),
+        parsedAmount,
         `[Admin Adjust] ${description}`
       );
       // Generate system invoice for manual deposit
       generateSystemInvoice(
         userId,
         'topup',
-        parseFloat(amount),
+        parsedAmount,
         `Top-up Saldo (Admin Adjust): ${description}`,
         `ADJ-${Date.now()}`
       ).catch(console.error);
     } else if (type === 'refund') {
       newBalance = await WalletService.addBalance(
         userId,
-        parseFloat(amount),
+        parsedAmount,
         `[Admin Refund] ${description}`
       );
       // Generate system invoice for REFUND
       generateSystemInvoice(
         userId,
         'refund',
-        parseFloat(amount),
+        parsedAmount,
         `Refund Saldo: ${description}`,
         `REF-${Date.now()}`
       ).catch(console.error);
@@ -154,7 +166,7 @@ router.post('/manual-adjust', authMiddleware, adminOnly, async (req, res) => {
       const refId = `ADJ-${Date.now()}`;
       newBalance = await WalletService.deductBalance(
         userId,
-        parseFloat(amount),
+        parsedAmount,
         `[Admin Adjust] ${description}`,
         refId
       );
@@ -180,8 +192,9 @@ router.post('/topup', authMiddleware, async (req, res) => {
     const { amount, method } = req.body;
     const userId = req.userId;
 
-    if (!amount || amount < 10000) {
-      return res.status(400).json({ error: 'Minimum top-up is Rp 10.000' });
+    const parsedAmount = parseAmount(amount);
+    if (parsedAmount === null || parsedAmount < 10000) {
+      return res.status(400).json({ error: 'Minimum top-up is Rp 10.000 and amount must be a number' });
     }
 
     if (!method) {
@@ -192,7 +205,7 @@ router.post('/topup', authMiddleware, async (req, res) => {
 
     try {
       const pakasir = await getPakasirInstance();
-      const result = await pakasir.createPayment(method, orderId, amount);
+      const result = await pakasir.createPayment(method, orderId, parsedAmount);
       console.log('[Pakasir Create Response]:', JSON.stringify(result, null, 2));
 
       // Calculate fee based on Pakasir Official Pricing
@@ -206,15 +219,14 @@ router.post('/topup', authMiddleware, async (req, res) => {
         return 0;
       };
 
-      const estimatedFee = calculateFee(method, amount);
-      // Ensure totalAmount is ALWAYS nominal + fee to show accumulation
-      const feeAmount = parseFloat(result.fee || estimatedFee);
-      const totalAmount = parseFloat(amount + feeAmount);
+      const estimatedFee = calculateFee(method, parsedAmount);
+      const feeAmount = typeof result.fee === 'number' ? result.fee : Number(result.fee ?? estimatedFee);
+      const totalAmount = parsedAmount + feeAmount;
 
       // Log as pending transaction so user can resume later
       await WalletService.createPendingDeposit(
         userId,
-        parseFloat(amount),
+        parsedAmount,
         `Top-up saldo (Order: ${orderId})`,
         orderId,
         result.payment_url || result.checkout_url || null,
@@ -228,10 +240,10 @@ router.post('/topup', authMiddleware, async (req, res) => {
         ...result,
         order_id: orderId,
         amount: totalAmount,
-        nominal: amount,
+        nominal: parsedAmount,
         fee_amount: feeAmount,
         expired_at: result.expired_at || null,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
       });
     } catch (e) {
       console.error('[Topup Error Detail]:', e);
@@ -257,13 +269,18 @@ router.post('/topup/check-status', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Order ID and amount are required' });
     }
 
+    const parsedAmount = parseAmount(amount);
+    if (parsedAmount === null) {
+      return res.status(400).json({ error: 'Amount must be a positive number' });
+    }
+
     // Security check: Make sure order_id belongs to the requester
     if (!order_id.startsWith(`TOPUP-${userId}-`)) {
       return res.status(403).json({ error: 'Unauthorized to check this order status' });
     }
 
     const pakasir = await getPakasirInstance();
-    const detail = await pakasir.detailPayment(order_id, parseFloat(amount));
+    const detail = await pakasir.detailPayment(order_id, parsedAmount);
 
     if (!detail) {
       return res.status(404).json({ error: 'Payment not found' });
@@ -278,7 +295,7 @@ router.post('/topup/check-status', authMiddleware, async (req, res) => {
         generateSystemInvoice(
           userId,
           'topup',
-          parseFloat(amount),
+          parsedAmount,
           `Top-up Saldo (Order: ${order_id})`,
           order_id
         ).catch(console.error);
@@ -346,6 +363,10 @@ router.post('/webhook/pakasir', async (req, res) => {
     }
 
     const parts = order_id.split('-');
+    if (parts.length < 3) {
+      return res.status(400).json({ error: 'Invalid order format' });
+    }
+
     const userId = parseInt(parts[1]);
 
     if (!userId || isNaN(userId)) {
@@ -353,8 +374,13 @@ router.post('/webhook/pakasir', async (req, res) => {
     }
 
     // 2. Security: Always verify with Pakasir detail API to prevent fake webhooks
+    const parsedAmount = parseAmount(amount);
+    if (parsedAmount === null) {
+      return res.status(400).json({ error: 'Invalid amount provided' });
+    }
+
     const pakasir = await getPakasirInstance();
-    const detail = await pakasir.detailPayment(order_id, parseFloat(amount));
+    const detail = await pakasir.detailPayment(order_id, parsedAmount);
 
     if (!detail || detail.status !== 'completed') {
       return res.status(400).json({ error: 'Payment verification failed' });
@@ -364,13 +390,13 @@ router.post('/webhook/pakasir', async (req, res) => {
     const completedBalance = await WalletService.completeDeposit(userId, order_id);
 
     if (completedBalance !== false) {
-      console.log(`[Webhook] Auto-completed balance for user ${userId}: Rp ${amount}`);
+      console.log(`[Webhook] Auto-completed balance for user ${userId}: Rp ${parsedAmount}`);
 
       // Generate system invoice
       generateSystemInvoice(
         userId,
         'topup',
-        parseFloat(amount),
+        parsedAmount,
         `Top-up Saldo Otomatis (Order: ${order_id})`,
         order_id
       ).catch((err) => {

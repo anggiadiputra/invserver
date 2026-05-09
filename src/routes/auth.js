@@ -77,6 +77,9 @@ router.post(
     // --- SAAS ONBOARDING ---
     // 1. Get Free Plan ID
     const freePlanResult = await pool.query("SELECT id FROM plans WHERE slug = 'free'");
+    if (freePlanResult.rows.length === 0) {
+      throw new AppError('Free plan not configured. Please contact administrator.', 500);
+    }
     const freePlanId = freePlanResult.rows[0].id;
 
     // 2. Create 'free' subscription

@@ -43,9 +43,11 @@ async function getJwks() {
 }
 
 function base64UrlToBuffer(b64url) {
-  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
-  const bin = atob(b64);
-  return Uint8Array.from(bin, (c) => c.charCodeAt(0)).buffer;
+  const padded = b64url.replace(/-/g, '+').replace(/_/g, '/').padEnd(
+    Math.ceil(b64url.length / 4) * 4,
+    '='
+  );
+  return Buffer.from(padded, 'base64');
 }
 
 async function importPublicKey(jwk) {

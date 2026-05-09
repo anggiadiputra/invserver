@@ -6,6 +6,100 @@ import nodemailer from 'nodemailer';
 
 const router = express.Router();
 
+const SMTP_ENCRYPTION_MODES = new Set(['none', 'ssl', 'tls']);
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const isNonEmptyString = (value) => typeof value === 'string' && value.trim().length > 0;
+const isValidEmail = (value) => typeof value === 'string' && EMAIL_REGEX.test(value);
+const isValidPort = (value) => Number.isInteger(value) && value > 0 && value <= 65535;
+
+const validateSmtpConfig = ({
+  smtp_host,
+  smtp_port,
+  smtp_user,
+  smtp_pass,
+  smtp_from_email,
+  smtp_encryption,
+  smtp_test_target,
+}) => {
+  const missing = [];
+  const invalid = [];
+
+  if (!isNonEmptyString(smtp_host)) missing.push('smtp_host');
+  if (smtp_port === undefined || smtp_port === null || smtp_port === '') {
+    missing.push('smtp_port');
+  }
+  if (!isNonEmptyString(smtp_user)) missing.push('smtp_user');
+  if (!isNonEmptyString(smtp_pass)) missing.push('smtp_pass');
+  if (!isNonEmptyString(smtp_from_email)) missing.push('smtp_from_email');
+  if (!isNonEmptyString(smtp_test_target)) missing.push('smtp_test_target');
+
+  const parsedPort = Number(smtp_port);
+  if (missing.length === 0 && !isValidPort(parsedPort)) {
+    invalid.push('smtp_port');
+  }
+
+  if (isNonEmptyString(smtp_from_email) && !isValidEmail(smtp_from_email)) {
+    invalid.push('smtp_from_email');
+  }
+
+  if (isNonEmptyString(smtp_test_target) && !isValidEmail(smtp_test_target)) {
+    invalid.push('smtp_test_target');
+  }
+
+  if (
+    smtp_encryption !== undefined &&
+    smtp_encryption !== null &&
+    smtp_encryption !== '' &&
+    !SMTP_ENCRYPTION_MODES.has(String(smtp_encryption).toLowerCase())
+  ) {
+    invalid.push('smtp_encryption');
+  }
+
+  return { missing, invalid, smtp_port: parsedPort };
+};
+
+const validateS3Config = ({ s3_endpoint, s3_bucket_name, s3_access_key, s3_secret_key }) => {
+  const missing = [];
+  const invalid = [];
+
+  if (!isNonEmptyString(s3_endpoint)) missing.push('s3_endpoint');
+  if (!isNonEmptyString(s3_bucket_name)) missing.push('s3_bucket_name');
+  if (!isNonEmptyString(s3_access_key)) missing.push('s3_access_key');
+  if (!isNonEmptyString(s3_secret_key)) missing.push('s3_secret_key');
+
+  if (missing.length === 0 && typeof s3_bucket_name === 'string' && s3_bucket_name.trim().length === 0) {
+    invalid.push('s3_bucket_name');
+  }
+
+  return { missing, invalid };
+};
+
+const validateSystemSettingsUpdate = (body) => {
+  const invalid = [];
+
+  if (body.smtp_port !== undefined && body.smtp_port !== null) {
+    const parsedPort = Number(body.smtp_port);
+    if (!isValidPort(parsedPort)) invalid.push('smtp_port');
+  }
+
+  if (body.smtp_from_email !== undefined && body.smtp_from_email !== null) {
+    if (!isValidEmail(body.smtp_from_email)) invalid.push('smtp_from_email');
+  }
+
+  if (body.smtp_test_target !== undefined && body.smtp_test_target !== null) {
+    if (!isValidEmail(body.smtp_test_target)) invalid.push('smtp_test_target');
+  }
+
+  if (body.smtp_encryption !== undefined && body.smtp_encryption !== null) {
+    if (!SMTP_ENCRYPTION_MODES.has(String(body.smtp_encryption).toLowerCase())) {
+      invalid.push('smtp_encryption');
+    }
+  }
+
+  return invalid;
+};
+
 // Get company settings (merged with global system settings for UI)
 router.get('/', authMiddleware, async (req, res) => {
   try {
@@ -134,6 +228,14 @@ router.put('/system', authMiddleware, adminOnly, async (req, res) => {
       return res.status(400).json({ error: 'No fields to update' });
     }
 
+    const invalidFields = validateSystemSettingsUpdate(req.body);
+    if (invalidFields.length > 0) {
+      return res.status(400).json({
+        error: `Invalid system settings fields: ${invalidFields.join(', ')}`,
+        details: invalidFields,
+      });
+    }
+
     updates.push('updated_at = CURRENT_TIMESTAMP');
     const query = `UPDATE system_settings SET ${updates.join(', ')} WHERE id = 1 RETURNING *`;
     const result = await pool.query(query, values);
@@ -152,6 +254,7 @@ router.put('/system', authMiddleware, adminOnly, async (req, res) => {
 router.post('/test-s3', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { s3_endpoint, s3_bucket_name, s3_region, s3_access_key, s3_secret_key } = req.body;
+    const { missing, invalid } = validateS3Config(req.body);
 
     console.log('S3 Test Request received:', {
       endpoint: s3_endpoint ? '***' : 'missing',
@@ -161,11 +264,20 @@ router.post('/test-s3', authMiddleware, adminOnly, async (req, res) => {
       secretKey: s3_secret_key ? '***' : 'missing',
     });
 
-    if (!s3_endpoint || !s3_bucket_name || !s3_access_key || !s3_secret_key) {
-      console.error('S3 Test: Missing required fields');
+    if (missing.length > 0) {
+      console.error('S3 Test: Missing required fields', missing);
       return res.status(400).json({
         success: false,
-        message: 'All S3 fields are required (endpoint, bucket, access key, secret key)',
+        message: `Missing required fields: ${missing.join(', ')}`,
+      });
+    }
+
+    if (invalid.length > 0) {
+      console.error('S3 Test: Invalid fields', invalid);
+      return res.status(400).json({
+        success: false,
+        message: `Invalid S3 fields: ${invalid.join(', ')}`,
+        details: invalid,
       });
     }
 
@@ -249,7 +361,7 @@ router.post('/test-smtp', authMiddleware, adminOnly, async (req, res) => {
   try {
     const {
       smtp_host,
-      smtp_port,
+      smtp_port: smtp_port_raw,
       smtp_user,
       smtp_pass,
       smtp_from_email,
@@ -259,42 +371,61 @@ router.post('/test-smtp', authMiddleware, adminOnly, async (req, res) => {
       smtp_test_message,
     } = req.body;
 
+    const { missing, invalid, smtp_port } = validateSmtpConfig({
+      smtp_host,
+      smtp_port: smtp_port_raw,
+      smtp_user,
+      smtp_pass,
+      smtp_from_email,
+      smtp_encryption,
+      smtp_test_target,
+    });
+
+    if (missing.length > 0) {
+      console.error('SMTP Test: Missing required fields', missing);
+      return res.status(400).json({
+        success: false,
+        message: 'All SMTP fields and test target email are required',
+        details: missing,
+      });
+    }
+
+    if (invalid.length > 0) {
+      console.error('SMTP Test: Invalid fields', invalid);
+      return res.status(400).json({
+        success: false,
+        message: `Invalid SMTP fields: ${invalid.join(', ')}`,
+        details: invalid,
+      });
+    }
+
     console.log('SMTP Test Request received:', {
       host: smtp_host,
       port: smtp_port,
       user: smtp_user ? '***' : 'missing',
       fromEmail: smtp_from_email,
       testTarget: smtp_test_target,
-      encryption: smtp_encryption,
+      encryption: smtp_encryption || 'none',
     });
-
-    if (
-      !smtp_host ||
-      !smtp_port ||
-      !smtp_user ||
-      !smtp_pass ||
-      !smtp_from_email ||
-      !smtp_test_target
-    ) {
-      console.error('SMTP Test: Missing required fields');
-      return res.status(400).json({
-        success: false,
-        message: 'All SMTP fields and test target email are required',
-      });
-    }
 
     // Configure transporter based on encryption
     let secure = false;
     let tls = {};
 
-    if (smtp_encryption === 'ssl') {
+    const encryptionMode = String(smtp_encryption || 'none').toLowerCase();
+    if (encryptionMode === 'ssl') {
       secure = true;
-    } else if (smtp_encryption === 'tls') {
+    } else if (encryptionMode === 'tls' || encryptionMode === 'none') {
       secure = false;
       tls = { rejectUnauthorized: false };
-    } else if (smtp_encryption === 'none') {
-      secure = false;
-      tls = { rejectUnauthorized: false };
+    }
+
+    let appName = process.env.APP_NAME || 'Invoizes';
+    try {
+      const systemNameResult = await pool.query('SELECT app_name FROM system_settings LIMIT 1');
+      appName = systemNameResult?.rows?.[0]?.app_name || appName;
+    } catch (error) {
+      console.warn('[SMTP Test] Could not read system app name, falling back to env/app default.');
     }
 
     const transporter = nodemailer.createTransport({

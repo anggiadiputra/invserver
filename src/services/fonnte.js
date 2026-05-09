@@ -8,6 +8,45 @@ const FONNTE_VALIDATE_URL = 'https://api.fonnte.com/validate';
  * Handles all WhatsApp messaging operations via Fonnte API
  */
 class FonnteService {
+  safeParseJSON(text) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+
+  async sendRequest(token, formData, url = FONNTE_API_URL) {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: token,
+      },
+      body: formData,
+    });
+
+    const rawText = await response.text();
+    const data = this.safeParseJSON(rawText);
+    return { response, data, rawText };
+  }
+
+  formatErrorResult(data, rawText) {
+    const errorMessage = data?.message || data?.reason || data?.error || rawText || 'Unknown error';
+    return {
+      success: false,
+      message: errorMessage,
+      error: errorMessage,
+    };
+  }
+
+  formatSuccessfulResult(result, successMessage) {
+    return {
+      success: true,
+      message: successMessage,
+      data: result?.data || result?.result || {},
+    };
+  }
+
   /**
    * Test Fonnte API connection with token
    * @param {string} token - Fonnte API token
@@ -28,60 +67,35 @@ class FonnteService {
       formData.append('message', testMessage);
       formData.append('countryCode', '62');
 
-      const response = await fetch(FONNTE_API_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: token,
-          // Native fetch otomatis menambahkan Content-Type: multipart/form-data; boundary=...
-        },
-        body: formData,
-      });
+      const result = await this.sendRequest(token, formData);
+      console.log('Fonnte response status:', result.response.status);
+      console.log('Fonnte response text:', result.rawText);
 
-      // Baca response sebagai text dulu untuk handle error non-JSON
-      const text = await response.text();
-      console.log('Fonnte response status:', response.status);
-      console.log('Fonnte response text:', text);
-
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch (e) {
-        console.error('Fonnte response is not valid JSON. Raw response:', text);
-        return {
-          success: false,
-          message: 'Fonnte API Error',
-          error: text,
-        };
-      }
-
-      // Logic response handling
-      if (response.status === 200) {
+      if (result.response.ok) {
         return {
           success: true,
           message: `Connection successful! Test message sent to ${testTarget}`,
-          data: data.data || data.result || { status: 'active' },
-        };
-      } else if (response.status === 400) {
-        return {
-          success: true, // Token valid, tapi parameter salah (misal nomor tidak terdaftar)
-          message:
-            'Token is valid but request failed: ' +
-            (data.message || data.reason || 'Check parameters'),
-          data: data.data || data.result || { status: 'active' },
-        };
-      } else if (response.status === 401 || response.status === 403) {
-        return {
-          success: false,
-          message: data.message || 'Invalid token or unauthorized',
-          error: data.reason || data.message || 'Token is invalid',
+          data: result.data?.data || result.data?.result || { status: 'active' },
         };
       }
 
-      return {
-        success: false,
-        message: data.message || 'Connection failed',
-        error: data.reason || data.error || 'Unknown error',
-      };
+      if (result.response.status === 400) {
+        return {
+          success: false,
+          message: 'Request failed: ' + (result.data?.message || result.data?.reason || 'Check parameters'),
+          error: result.data?.message || result.data?.reason || 'Bad request',
+        };
+      }
+
+      if (result.response.status === 401 || result.response.status === 403) {
+        return {
+          success: false,
+          message: result.data?.message || 'Invalid token or unauthorized',
+          error: result.data?.reason || result.data?.message || 'Token is invalid',
+        };
+      }
+
+      return this.formatErrorResult(result.data, result.rawText);
     } catch (error) {
       console.error('Fonnte test connection error:', error);
       return {
@@ -113,7 +127,6 @@ class FonnteService {
 
       const response = await fetch(FONNTE_VALIDATE_URL, {
         method: 'POST',
-        mode: 'cors',
         headers: {
           Authorization: token,
         },
@@ -171,7 +184,6 @@ class FonnteService {
     try {
       const response = await fetch(FONNTE_API_URL, {
         method: 'POST',
-        mode: 'cors',
         headers: {
           Authorization: token,
         },
@@ -227,7 +239,6 @@ class FonnteService {
     try {
       const response = await fetch(FONNTE_API_URL, {
         method: 'POST',
-        mode: 'cors',
         headers: {
           Authorization: token,
         },
@@ -283,7 +294,6 @@ class FonnteService {
     try {
       const response = await fetch(FONNTE_API_URL, {
         method: 'POST',
-        mode: 'cors',
         headers: {
           Authorization: token,
         },
@@ -344,7 +354,6 @@ class FonnteService {
     try {
       const response = await fetch(FONNTE_API_URL, {
         method: 'POST',
-        mode: 'cors',
         headers: {
           Authorization: token,
         },
@@ -406,7 +415,6 @@ class FonnteService {
     try {
       const response = await fetch(FONNTE_API_URL, {
         method: 'POST',
-        mode: 'cors',
         headers: {
           Authorization: token,
         },
@@ -481,7 +489,6 @@ class FonnteService {
     try {
       const response = await fetch(FONNTE_API_URL, {
         method: 'POST',
-        mode: 'cors',
         headers: {
           Authorization: token,
         },
@@ -527,8 +534,10 @@ class FonnteService {
    */
   createFormData(data) {
     const formData = new FormData();
-    Object.keys(data).forEach((key) => {
-      formData.append(key, data[key]);
+    Object.entries(data).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        formData.append(key, String(value));
+      }
     });
     return formData;
   }
