@@ -3,6 +3,15 @@ import pool from '../db/pool.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { S3Client, ListBucketsCommand } from '@aws-sdk/client-s3';
 import nodemailer from 'nodemailer';
+import multer from 'multer';
+import { uploadFileToS3, getIsS3Configured, deleteFileFromS3 } from '../utils/s3.js';
+import catchAsync from '../utils/catchAsync.js';
+import AppError from '../utils/AppError.js';
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+});
 
 const router = express.Router();
 
@@ -237,8 +246,24 @@ router.put('/system', authMiddleware, adminOnly, async (req, res) => {
     }
 
     updates.push('updated_at = CURRENT_TIMESTAMP');
+    
+    // Fetch existing first to check if logo changed
+    const existing = await pool.query('SELECT company_logo FROM system_settings WHERE id = 1');
+    const oldLogo = existing.rows[0]?.company_logo;
+
     const query = `UPDATE system_settings SET ${updates.join(', ')} WHERE id = 1 RETURNING *`;
     const result = await pool.query(query, values);
+
+    // Delete old logo if it changed
+    if (
+      req.body.company_logo !== undefined &&
+      oldLogo &&
+      oldLogo !== req.body.company_logo
+    ) {
+      deleteFileFromS3(oldLogo).catch((err) =>
+        console.error('Failed to delete old system logo from S3:', err)
+      );
+    }
 
     res.json(result.rows[0]);
   } catch (error) {
@@ -650,6 +675,19 @@ router.put('/', authMiddleware, async (req, res) => {
       values.push(req.userId);
       const userIdParam = paramIndex;
 
+      // Delete the old logo from S3 if it changed
+      const oldLogo = existing.rows[0].company_logo;
+      if (
+        req.body.company_logo !== undefined &&
+        oldLogo &&
+        oldLogo !== req.body.company_logo
+      ) {
+        // Run asynchronously so it doesn't block the request
+        deleteFileFromS3(oldLogo).catch((err) =>
+          console.error('Failed to delete old logo from S3:', err)
+        );
+      }
+
       const query = `
         UPDATE company_settings
         SET ${updates.join(', ')}
@@ -666,5 +704,34 @@ router.put('/', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Failed to update settings', details: error.message });
   }
 });
+
+// Upload company logo
+router.post(
+  '/upload-logo',
+  authMiddleware,
+  upload.single('logo'),
+  catchAsync(async (req, res, next) => {
+    if (!req.file) {
+      return next(new AppError('No file uploaded', 400));
+    }
+
+    if (!(await getIsS3Configured())) {
+      return next(new AppError('S3/R2 storage is not configured on the server', 500));
+    }
+
+    try {
+      const url = await uploadFileToS3(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        'logos'
+      );
+      res.json({ url });
+    } catch (error) {
+      console.error('S3 upload error:', error);
+      return next(new AppError('Failed to upload file', 500));
+    }
+  })
+);
 
 export default router;

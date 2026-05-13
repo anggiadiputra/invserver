@@ -203,6 +203,7 @@ router.get(
         s.id as subscription_id,
         s.status as subscription_status,
         s.expires_at as subscription_expires_at,
+        s.is_lifetime as subscription_is_lifetime,
         p.name as plan_name,
         p.slug as plan_slug,
         p.price_monthly as plan_price
@@ -246,7 +247,8 @@ router.get(
           : {
               id: row.subscription_id,
               status: row.subscription_status,
-              expires_at: row.subscription_expires_at,
+              expires_at: row.subscription_is_lifetime ? null : row.subscription_expires_at,
+              is_lifetime: row.subscription_is_lifetime || false,
               plan: {
                 name: row.plan_name,
                 slug: row.plan_slug,

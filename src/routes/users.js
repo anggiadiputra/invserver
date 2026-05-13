@@ -4,6 +4,27 @@ import { authMiddleware, adminOnly } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// GET user subscription details (Admin Only)
+router.get('/:id/subscription', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `SELECT s.*, p.name as plan_name, p.slug as plan_slug, p.price_monthly
+       FROM subscriptions s
+       JOIN plans p ON s.plan_id = p.id
+       WHERE s.user_id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No subscription found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching user subscription:', error);
+    res.status(500).json({ error: 'Failed to fetch subscription' });
+  }
+});
+
 // GET all users (Admin Only) with status filtering, search, and pagination
 router.get('/', authMiddleware, adminOnly, async (req, res) => {
   try {
@@ -150,6 +171,97 @@ router.delete('/:id', authMiddleware, adminOnly, async (req, res) => {
   } catch (error) {
     console.error('Error deleting user:', error);
     res.status(500).json({ error: 'Failed to delete user' });
+  }
+});
+
+// Grant Lifetime Plan (Admin Only)
+router.post('/:id/grant-lifetime', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { plan_id } = req.body;
+
+    if (!plan_id) {
+      return res.status(400).json({ error: 'plan_id is required' });
+    }
+
+    // Verify plan exists
+    const planResult = await pool.query('SELECT id, name, slug FROM plans WHERE id = $1', [plan_id]);
+    if (planResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Plan not found' });
+    }
+    const plan = planResult.rows[0];
+
+    // Verify user exists
+    const userResult = await pool.query('SELECT id, email FROM users WHERE id = $1', [id]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Update or insert subscription with is_lifetime = true
+    const result = await pool.query(
+      `INSERT INTO subscriptions (user_id, plan_id, status, is_lifetime, expires_at, updated_at)
+       VALUES ($1, $2, 'active', true, NULL, CURRENT_TIMESTAMP)
+       ON CONFLICT (user_id) DO UPDATE
+         SET plan_id = $2,
+             status = 'active',
+             is_lifetime = true,
+             expires_at = NULL,
+             updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [id, plan_id]
+    );
+
+    res.json({
+      success: true,
+      message: `Lifetime ${plan.name} granted to user`,
+      subscription: result.rows[0],
+      plan,
+    });
+  } catch (error) {
+    console.error('Error granting lifetime plan:', error);
+    res.status(500).json({ error: 'Failed to grant lifetime plan' });
+  }
+});
+
+// Revoke Lifetime Plan (Admin Only)
+router.post('/:id/revoke-lifetime', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Verify user exists and has a lifetime subscription
+    const subResult = await pool.query(
+      'SELECT s.*, p.name as plan_name FROM subscriptions s JOIN plans p ON s.plan_id = p.id WHERE s.user_id = $1',
+      [id]
+    );
+    if (subResult.rows.length === 0) {
+      return res.status(404).json({ error: 'No subscription found for this user' });
+    }
+    if (!subResult.rows[0].is_lifetime) {
+      return res.status(400).json({ error: 'User does not have a lifetime subscription' });
+    }
+
+    // Revoke: set is_lifetime = false, give 30-day grace period
+    const gracePeriodExpiry = new Date();
+    gracePeriodExpiry.setDate(gracePeriodExpiry.getDate() + 30);
+
+    const result = await pool.query(
+      `UPDATE subscriptions
+       SET is_lifetime = false,
+           expires_at = $1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = $2
+       RETURNING *`,
+      [gracePeriodExpiry, id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Lifetime plan revoked. User has a 30-day grace period.',
+      subscription: result.rows[0],
+    });
+  } catch (error) {
+    console.error('Error revoking lifetime plan:', error);
+    res.status(500).json({ error: 'Failed to revoke lifetime plan' });
   }
 });
 

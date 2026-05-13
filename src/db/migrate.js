@@ -374,7 +374,7 @@ async function migrate() {
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         target VARCHAR(20) NOT NULL,
         message_type VARCHAR(50) DEFAULT 'text',
-        invoice_id INTEGER REFERENCES invoices(id),
+        invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
         status VARCHAR(50) DEFAULT 'sent',
         error_message TEXT,
         sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -525,54 +525,32 @@ async function migrate() {
     }
 
     // --- DATA NORMALIZATION & IDENTITY MERGING (formerly in server.js) ---
-    console.log('🔄 Running data normalization and user identity merging...');
+    // (Removed to prevent unintended data loss/merging on subsequent migrations)
+
+    // Add is_lifetime support for admin-granted lifetime plans
     await client.query(`
-      DO $$ 
-      DECLARE
-          r RECORD;
-          target_id INTEGER;
-          source_ids INTEGER[];
-          old_id INTEGER;
-          new_id INTEGER;
+      DO $$
       BEGIN
-          -- 1. Identify and merge duplicate users based on lowercase email
-          FOR r IN (
-              SELECT LOWER(email) as lemail, ARRAY_AGG(id ORDER BY (neon_user_id IS NOT NULL) DESC, created_at ASC) as ids
-              FROM users
-              GROUP BY LOWER(email)
-              HAVING COUNT(*) > 1
-          ) LOOP
-              target_id := r.ids[1];
-              source_ids := r.ids[2:]; 
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'subscriptions' AND column_name = 'is_lifetime') THEN
+          ALTER TABLE subscriptions ADD COLUMN is_lifetime BOOLEAN DEFAULT false;
+        END IF;
+      END $$;
+    `);
 
-              UPDATE customers SET user_id = target_id WHERE user_id = ANY(source_ids);
-              UPDATE services SET user_id = target_id WHERE user_id = ANY(source_ids);
-              UPDATE invoices SET user_id = target_id WHERE user_id = ANY(source_ids);
-              UPDATE bank_accounts SET user_id = target_id WHERE user_id = ANY(source_ids);
-              
-              IF NOT EXISTS (SELECT 1 FROM company_settings WHERE user_id = target_id) THEN
-                  UPDATE company_settings SET user_id = target_id 
-                  WHERE id = (SELECT id FROM company_settings WHERE user_id = ANY(source_ids) ORDER BY updated_at DESC LIMIT 1);
-              END IF;
-              DELETE FROM company_settings WHERE user_id = ANY(source_ids);
-              DELETE FROM users WHERE id = ANY(source_ids);
-          END LOOP;
-
-          -- 2. Normalize all remaining emails to lowercase
-          UPDATE users SET email = LOWER(email);
-
-          -- 3. Identity Swap: Rename sini@diurusin.id to anggiadiputra@gmail.com if possible
-          SELECT id INTO old_id FROM users WHERE LOWER(email) = 'sini@diurusin.id';
-          SELECT id INTO new_id FROM users WHERE LOWER(email) = 'anggiadiputra@gmail.com';
-
-          IF (old_id IS NOT NULL AND new_id IS NULL) THEN
-              UPDATE users SET email = 'anggiadiputra@gmail.com' WHERE id = old_id;
-          ELSIF (old_id IS NOT NULL AND new_id IS NOT NULL AND old_id != new_id) THEN
-              UPDATE customers SET user_id = new_id WHERE user_id = old_id;
-              UPDATE invoices SET user_id = new_id WHERE user_id = old_id;
-              UPDATE services SET user_id = new_id WHERE user_id = old_id;
-              DELETE FROM users WHERE id = old_id;
-          END IF;
+    // Fix whatsapp_logs.invoice_id FK — must be ON DELETE SET NULL so cascade deletes on invoices don't break
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE constraint_name = 'whatsapp_logs_invoice_id_fkey'
+            AND table_name = 'whatsapp_logs'
+        ) THEN
+          ALTER TABLE whatsapp_logs DROP CONSTRAINT whatsapp_logs_invoice_id_fkey;
+          ALTER TABLE whatsapp_logs ADD CONSTRAINT whatsapp_logs_invoice_id_fkey
+            FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL;
+        END IF;
       END $$;
     `);
 

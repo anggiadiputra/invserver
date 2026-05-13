@@ -78,10 +78,15 @@ router.post(
       return next(new AppError('Valid IDs array is required', 400));
     }
 
-    await pool.query('DELETE FROM customers WHERE id = ANY($1::int[]) AND user_id = $2', [
-      ids,
-      req.userId,
-    ]);
+    try {
+      await pool.query('DELETE FROM customers WHERE id = ANY($1::int[]) AND user_id = $2', [
+        ids,
+        req.userId,
+      ]);
+    } catch (err) {
+      console.error('[Customers Batch Delete DB Error]:', err.message || err);
+      return next(new AppError(err.message || 'Database error saat batch delete', 500));
+    }
 
     res.json({ message: `${ids.length} customers deleted successfully` });
   })
