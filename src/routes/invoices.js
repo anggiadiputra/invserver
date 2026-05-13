@@ -79,9 +79,9 @@ router.get('/stats/summary', authMiddleware, async (req, res) => {
     const result = await pool.query(
       `SELECT 
         COUNT(*) as total_invoices,
-        COALESCE(SUM(total_amount + COALESCE(tax_amount, 0)), 0) as total_income,
+        COALESCE(SUM(CASE WHEN status NOT IN ('draft', 'cancelled') THEN (total_amount + COALESCE(tax_amount, 0)) ELSE 0 END), 0) as total_income,
         COALESCE(SUM(CASE WHEN status = 'paid' THEN (total_amount + COALESCE(tax_amount, 0)) ELSE 0 END), 0) as total_paid,
-        COALESCE(SUM(CASE WHEN status != 'paid' THEN (total_amount + COALESCE(tax_amount, 0)) ELSE 0 END), 0) as total_pending
+        COALESCE(SUM(CASE WHEN status IN ('sent', 'overdue', 'pending') THEN (total_amount + COALESCE(tax_amount, 0)) ELSE 0 END), 0) as total_pending
        FROM invoices 
        WHERE user_id = $1 AND invoice_type = 'regular' `,
       [req.userId]
@@ -97,16 +97,23 @@ router.get('/stats/summary', authMiddleware, async (req, res) => {
 router.get('/stats/monthly', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT 
-        TO_CHAR(issue_date, 'Mon') as month,
-        COALESCE(SUM(CASE WHEN status = 'paid' THEN (total_amount + COALESCE(tax_amount, 0)) ELSE 0 END), 0) as paid_amount,
-        COALESCE(SUM(CASE WHEN status != 'paid' THEN (total_amount + COALESCE(tax_amount, 0)) ELSE 0 END), 0) as unpaid_amount
-       FROM invoices 
-       WHERE user_id = $1 
-         AND invoice_type = 'regular'
-         AND issue_date >= CURRENT_DATE - INTERVAL '6 months'
-       GROUP BY TO_CHAR(issue_date, 'Mon'), DATE_TRUNC('month', issue_date)
-       ORDER BY DATE_TRUNC('month', issue_date) ASC`,
+      `WITH RECURSIVE months AS (
+        SELECT DATE_TRUNC('month', CURRENT_DATE) as month_date
+        UNION ALL
+        SELECT month_date - INTERVAL '1 month'
+        FROM months
+        WHERE month_date > DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months'
+      )
+      SELECT 
+        TO_CHAR(m.month_date, 'Mon') as month,
+        COALESCE(SUM(CASE WHEN i.status = 'paid' THEN (i.total_amount + COALESCE(i.tax_amount, 0)) ELSE 0 END), 0) as paid_amount,
+        COALESCE(SUM(CASE WHEN i.status IN ('sent', 'overdue', 'pending') THEN (i.total_amount + COALESCE(i.tax_amount, 0)) ELSE 0 END), 0) as unpaid_amount
+      FROM months m
+      LEFT JOIN invoices i ON DATE_TRUNC('month', i.issue_date) = m.month_date 
+        AND i.user_id = $1 
+        AND i.invoice_type = 'regular'
+      GROUP BY m.month_date
+      ORDER BY m.month_date ASC`,
       [req.userId]
     );
     res.json(result.rows);
