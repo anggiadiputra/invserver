@@ -59,7 +59,12 @@ router.get('/invoices/:id', async (req, res) => {
         logo: admin?.company_logo || sys.company_logo,
         address: admin?.company_address || 'Invoice Platform Service',
         email: admin?.company_email || 'billing@invoice.id',
-        phone: admin?.company_phone || '-'
+        phone: admin?.company_phone || '-',
+        village_name: admin?.village_name,
+        district_name: admin?.district_name,
+        regency_name: admin?.regency_name,
+        province_name: admin?.province_name,
+        postal_code: admin?.company_postal_code,
       };
     } else {
       // For regular invoices, the sender is the user's company profile
@@ -71,7 +76,12 @@ router.get('/invoices/:id', async (req, res) => {
           logo: s.company_logo,
           address: s.company_address,
           email: s.company_email,
-          phone: s.company_phone
+          phone: s.company_phone,
+          village_name: s.village_name,
+          district_name: s.district_name,
+          regency_name: s.regency_name,
+          province_name: s.province_name,
+          postal_code: s.company_postal_code,
         };
       }
     }
@@ -95,6 +105,11 @@ router.get('/invoices/:id', async (req, res) => {
           phone: u.company_phone || '',
           address: u.company_address || '',
           city: u.company_city || '',
+          village_name: u.village_name || '',
+          district_name: u.district_name || '',
+          regency_name: u.regency_name || u.company_city || '',
+          province_name: u.province_name || u.company_province || '',
+          postal_code: u.company_postal_code || '',
         };
       }
     } else if (invoice.customer_id) {

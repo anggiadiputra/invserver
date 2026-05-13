@@ -248,6 +248,55 @@ async function migrate() {
       END $$;
     `);
 
+    // Add company profile and region columns to company_settings if they don't exist
+    await client.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'company_city') THEN
+          ALTER TABLE company_settings ADD COLUMN company_city VARCHAR(100);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'company_province') THEN
+          ALTER TABLE company_settings ADD COLUMN company_province VARCHAR(100);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'company_country') THEN
+          ALTER TABLE company_settings ADD COLUMN company_country VARCHAR(100);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'company_postal_code') THEN
+          ALTER TABLE company_settings ADD COLUMN company_postal_code VARCHAR(20);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'company_mobile_phone') THEN
+          ALTER TABLE company_settings ADD COLUMN company_mobile_phone VARCHAR(20);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'company_website') THEN
+          ALTER TABLE company_settings ADD COLUMN company_website VARCHAR(255);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'province_id') THEN
+          ALTER TABLE company_settings ADD COLUMN province_id VARCHAR(20);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'regency_id') THEN
+          ALTER TABLE company_settings ADD COLUMN regency_id VARCHAR(20);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'district_id') THEN
+          ALTER TABLE company_settings ADD COLUMN district_id VARCHAR(20);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'village_id') THEN
+          ALTER TABLE company_settings ADD COLUMN village_id VARCHAR(20);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'province_name') THEN
+          ALTER TABLE company_settings ADD COLUMN province_name VARCHAR(100);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'regency_name') THEN
+          ALTER TABLE company_settings ADD COLUMN regency_name VARCHAR(100);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'district_name') THEN
+          ALTER TABLE company_settings ADD COLUMN district_name VARCHAR(100);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'company_settings' AND column_name = 'village_name') THEN
+          ALTER TABLE company_settings ADD COLUMN village_name VARCHAR(100);
+        END IF;
+      END $$;
+    `);
+
     // Add discount column to invoice_items if it doesn't exist
     await client.query(`
       DO $$

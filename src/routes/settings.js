@@ -151,6 +151,20 @@ router.get('/', authMiddleware, async (req, res) => {
       'email_invoice_template',
       'email_paid_template',
       'email_reminder_template',
+      'province_id',
+      'regency_id',
+      'district_id',
+      'village_id',
+      'province_name',
+      'regency_name',
+      'district_name',
+      'village_name',
+      'company_city',
+      'company_province',
+      'company_country',
+      'company_postal_code',
+      'company_mobile_phone',
+      'company_website',
     ];
 
     for (const key of restorableKeys) {
