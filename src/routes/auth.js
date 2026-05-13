@@ -467,4 +467,43 @@ router.post(
   })
 );
 
+// Update user profile
+router.put(
+  '/profile',
+  authMiddleware,
+  [
+    body('firstName').trim().notEmpty().withMessage('First name is required'),
+    body('lastName').trim().notEmpty().withMessage('Last name is required'),
+  ],
+  catchAsync(async (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { firstName, lastName } = req.body;
+
+    const result = await pool.query(
+      'UPDATE users SET first_name = $1, last_name = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING id, email, first_name, last_name, role',
+      [firstName, lastName, req.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return next(new AppError('User not found', 404));
+    }
+
+    res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: result.rows[0].id,
+        email: result.rows[0].email,
+        firstName: result.rows[0].first_name,
+        lastName: result.rows[0].last_name,
+        role: result.rows[0].role,
+      },
+    });
+  })
+);
+
 export default router;

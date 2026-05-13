@@ -298,11 +298,21 @@ router.patch('/:id/status', authMiddleware, async (req, res) => {
   try {
     const { status } = req.body;
     const identifier = req.params.id;
-    let query = 'UPDATE invoices SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND user_id = $3 RETURNING *';
-    let params = [status, identifier, req.userId];
-
-    if (isNaN(identifier) || isNaN(parseFloat(identifier))) {
-      query = 'UPDATE invoices SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE invoice_number = $2 AND user_id = $3 RETURNING *';
+    let query, params;
+    if (status === 'paid') {
+      query = 'UPDATE invoices SET status = $1, paid_amount = (total_amount + COALESCE(tax_amount, 0)), updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND user_id = $3 RETURNING *';
+      params = [status, identifier, req.userId];
+      
+      if (isNaN(identifier) || isNaN(parseFloat(identifier))) {
+        query = 'UPDATE invoices SET status = $1, paid_amount = (total_amount + COALESCE(tax_amount, 0)), updated_at = CURRENT_TIMESTAMP WHERE invoice_number = $2 AND user_id = $3 RETURNING *';
+      }
+    } else {
+      query = 'UPDATE invoices SET status = $1, paid_amount = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND user_id = $3 RETURNING *';
+      params = [status, identifier, req.userId];
+      
+      if (isNaN(identifier) || isNaN(parseFloat(identifier))) {
+        query = 'UPDATE invoices SET status = $1, paid_amount = 0, updated_at = CURRENT_TIMESTAMP WHERE invoice_number = $2 AND user_id = $3 RETURNING *';
+      }
     }
 
     const result = await pool.query(query, params);
