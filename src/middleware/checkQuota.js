@@ -10,7 +10,7 @@ export async function checkInvoiceQuota(req, res, next) {
     // Get active subscription and its plan limits
     const result = await pool.query(
       `
-      SELECT p.max_invoices, s.status as sub_status
+      SELECT p.max_invoices, s.status as sub_status, s.is_lifetime
       FROM subscriptions s
       JOIN plans p ON s.plan_id = p.id
       WHERE s.user_id = $1
@@ -25,10 +25,16 @@ export async function checkInvoiceQuota(req, res, next) {
         .json({ error: 'No active subscription found. Please contact support.' });
     }
 
-    const { max_invoices, sub_status } = result.rows[0];
+    const { max_invoices, sub_status, is_lifetime } = result.rows[0];
+
+    // 0. Lifetime users have no restrictions
+    if (is_lifetime === true) {
+      return next();
+    }
 
     // 1. Check if subscription is in good standing
-    if (sub_status !== 'active' && sub_status !== 'trial' && sub_status !== 'cancelled') {
+    const allowedStatuses = ['active', 'trial', 'cancelled', 'grace_period', 'past_due', 'lifetime'];
+    if (!allowedStatuses.includes(sub_status)) {
       return res.status(402).json({
         error: 'Your subscription is no longer active. Please upgrade or renew to continue.',
         code: 'SUBSCRIPTION_INACTIVE',
@@ -69,7 +75,7 @@ export async function checkCustomerQuota(req, res, next) {
 
     const result = await pool.query(
       `
-      SELECT p.max_customers, s.status as sub_status
+      SELECT p.max_customers, s.status as sub_status, s.is_lifetime
       FROM subscriptions s
       JOIN plans p ON s.plan_id = p.id
       WHERE s.user_id = $1
@@ -83,9 +89,15 @@ export async function checkCustomerQuota(req, res, next) {
         .json({ error: 'No active subscription found. Please contact support.' });
     }
 
-    const { max_customers, sub_status } = result.rows[0];
+    const { max_customers, sub_status, is_lifetime } = result.rows[0];
 
-    if (sub_status !== 'active' && sub_status !== 'trial' && sub_status !== 'cancelled') {
+    // 0. Lifetime users have no restrictions
+    if (is_lifetime === true) {
+      return next();
+    }
+
+    const allowedStatuses = ['active', 'trial', 'cancelled', 'grace_period', 'past_due', 'lifetime'];
+    if (!allowedStatuses.includes(sub_status)) {
       return res.status(402).json({
         error: 'Your subscription is no longer active. Please upgrade or renew to continue.',
         code: 'SUBSCRIPTION_INACTIVE',

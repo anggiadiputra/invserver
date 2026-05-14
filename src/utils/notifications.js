@@ -22,6 +22,17 @@ export async function sendInvoiceNotifications(
     if (invoiceResult.rows.length === 0) return;
     const invoice = invoiceResult.rows[0];
 
+    // 1.1 Fetch user's plan features
+    const subResult = await pool.query(
+      `SELECT p.features, s.is_lifetime 
+       FROM subscriptions s 
+       JOIN plans p ON s.plan_id = p.id 
+       WHERE s.user_id = $1`,
+      [userId]
+    );
+    const planFeatures = subResult.rows[0]?.features || {};
+    const isLifetime = subResult.rows[0]?.is_lifetime || false;
+
     // 2. Fetch customer data
     const customerResult = await pool.query('SELECT * FROM customers WHERE id = $1', [
       invoice.customer_id,
@@ -45,7 +56,9 @@ export async function sendInvoiceNotifications(
       },
       company,
       userId, // Original sender ID for logging
-      baseUrl
+      baseUrl,
+      planFeatures,
+      isLifetime
     });
   } catch (error) {
     console.error('Error in sendInvoiceNotifications:', error);
@@ -111,7 +124,7 @@ export async function sendSystemInvoiceNotifications(
 /**
  * Internal helper to process templates and send through multiple channels
  */
-async function processNotifications({ invoice, customer, company, userId, baseUrl }) {
+async function processNotifications({ invoice, customer, company, userId, baseUrl, planFeatures = {}, isLifetime = false }) {
   // Fetch global system settings for integrations (Fonnte, SMTP, etc)
   const systemResult = await pool.query('SELECT * FROM system_settings LIMIT 1');
   const systemSettings = systemResult.rows[0] || {};
@@ -144,80 +157,101 @@ async function processNotifications({ invoice, customer, company, userId, baseUr
     return result;
   };
 
-  // --- WHATSAPP LOGIC ---
-  if (systemSettings.fonnte_token && customer.phone) {
-    let waTpl = systemSettings.wa_invoice_template;
-    if (invoice.status === 'paid' && systemSettings.wa_paid_template)
-      waTpl = systemSettings.wa_paid_template;
-    else if (
-      (invoice.status === 'overdue' || invoice.status === 'sent') &&
-      systemSettings.wa_reminder_template
-    )
-      waTpl = systemSettings.wa_reminder_template;
+  // Define a unique message type based on status for idempotency
+  const statusType = `auto_${invoice.status}`;
+  const fkCol = invoice.is_system ? 'system_invoice_id' : 'invoice_id';
 
-    if (waTpl) {
-      const message = applyReplacements(waTpl);
-      fonnteService
-        .sendTextMessage({
-          token: systemSettings.fonnte_token,
-          target: customer.phone,
-          message,
-          countryCode: '62',
-        })
-        .then((res) => {
-          if (res.success) {
-            const logTable = invoice.is_system ? 'whatsapp_logs' : 'whatsapp_logs'; // Same table
-            const fkCol = invoice.is_system ? 'system_invoice_id' : 'invoice_id';
-            
-            pool.query(
-              `INSERT INTO whatsapp_logs (user_id, target, message_type, ${fkCol}, status, sent_at) VALUES ($1, $2, $3, $4, $5, NOW())`,
-              [userId, customer.phone, 'invoice_auto', invoice.id, 'sent']
-            );
-          }
-        })
-        .catch((err) => console.error('Auto WA Error:', err));
+  // --- WHATSAPP LOGIC ---
+  const canSendWA = invoice.is_system || isLifetime || planFeatures.whatsapp === true;
+
+  if (systemSettings.fonnte_token && customer.phone && canSendWA) {
+    // Check if WA was already sent for this specific status/invoice
+    const existingLog = await pool.query(
+      `SELECT id FROM whatsapp_logs WHERE ${fkCol} = $1 AND message_type = $2 LIMIT 1`,
+      [invoice.id, statusType]
+    );
+
+    if (existingLog.rows.length === 0) {
+      let waTpl = systemSettings.wa_invoice_template;
+      if (invoice.status === 'paid' && systemSettings.wa_paid_template)
+        waTpl = systemSettings.wa_paid_template;
+      else if (
+        (invoice.status === 'overdue' || invoice.status === 'sent') &&
+        systemSettings.wa_reminder_template
+      )
+        waTpl = systemSettings.wa_reminder_template;
+
+      if (waTpl) {
+        const message = applyReplacements(waTpl);
+        fonnteService
+          .sendTextMessage({
+            token: systemSettings.fonnte_token,
+            target: customer.phone,
+            message,
+            countryCode: '62',
+          })
+          .then((res) => {
+            if (res.success) {
+              pool.query(
+                `INSERT INTO whatsapp_logs (user_id, target, message_type, ${fkCol}, status, sent_at) VALUES ($1, $2, $3, $4, $5, NOW())`,
+                [userId, customer.phone, statusType, invoice.id, 'sent']
+              );
+            }
+          })
+          .catch((err) => console.error('Auto WA Error:', err));
+      }
     }
   }
 
   // --- EMAIL LOGIC ---
+  const canSendEmail = invoice.is_system || isLifetime || planFeatures.email === true;
+
   if (
     systemSettings.smtp_host &&
     systemSettings.smtp_user &&
     systemSettings.smtp_pass &&
-    customer.email
+    customer.email &&
+    canSendEmail
   ) {
-    let emailTpl = systemSettings.email_invoice_template;
-    let subject = `Invoice ${invoice.invoice_number} - ${company.company_name || 'Billing'}`;
+    // Check if Email was already sent for this specific status/invoice
+    const existingLog = await pool.query(
+      `SELECT id FROM email_logs WHERE ${fkCol} = $1 AND subject ILIKE $2 LIMIT 1`,
+      [invoice.id, `%${invoice.invoice_number}%`]
+    );
 
-    if (invoice.status === 'paid' && systemSettings.email_paid_template) {
-      emailTpl = systemSettings.email_paid_template;
-      subject = `Pembayaran Diterima - Invoice ${invoice.invoice_number}`;
-    } else if (
-      (invoice.status === 'overdue' || invoice.status === 'sent') &&
-      systemSettings.email_reminder_template
-    ) {
-      emailTpl = systemSettings.email_reminder_template;
-      subject = `Pengingat Pembayaran - Invoice ${invoice.invoice_number}`;
-    }
+    if (existingLog.rows.length === 0) {
+      let emailTpl = systemSettings.email_invoice_template;
+      let subject = `Invoice ${invoice.invoice_number} - ${company.company_name || 'Billing'}`;
 
-    if (emailTpl) {
-      const html = applyReplacements(emailTpl);
-      emailService
-        .sendEmail(systemSettings, {
-          to: customer.email,
-          subject,
-          html,
-        })
-        .then((res) => {
-          if (res.success) {
-            const fkCol = invoice.is_system ? 'system_invoice_id' : 'invoice_id';
-            pool.query(
-              `INSERT INTO email_logs (user_id, recipient, subject, ${fkCol}, status, sent_at) VALUES ($1, $2, $3, $4, $5, NOW())`,
-              [userId, customer.email, subject, invoice.id, 'sent']
-            );
-          }
-        })
-        .catch((err) => console.error('Auto Email Error:', err));
+      if (invoice.status === 'paid' && systemSettings.email_paid_template) {
+        emailTpl = systemSettings.email_paid_template;
+        subject = `Pembayaran Diterima - Invoice ${invoice.invoice_number}`;
+      } else if (
+        (invoice.status === 'overdue' || invoice.status === 'sent') &&
+        systemSettings.email_reminder_template
+      ) {
+        emailTpl = systemSettings.email_reminder_template;
+        subject = `Pengingat Pembayaran - Invoice ${invoice.invoice_number}`;
+      }
+
+      if (emailTpl) {
+        const html = applyReplacements(emailTpl);
+        emailService
+          .sendEmail(systemSettings, {
+            to: customer.email,
+            subject,
+            html,
+          })
+          .then((res) => {
+            if (res.success) {
+              pool.query(
+                `INSERT INTO email_logs (user_id, recipient, subject, ${fkCol}, status, sent_at) VALUES ($1, $2, $3, $4, $5, NOW())`,
+                [userId, customer.email, subject, invoice.id, 'sent']
+              );
+            }
+          })
+          .catch((err) => console.error('Auto Email Error:', err));
+      }
     }
   }
 }
