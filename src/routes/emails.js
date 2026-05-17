@@ -146,20 +146,24 @@ router.get('/logs', authMiddleware, async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const offset = (page - 1) * limit;
 
-    const countResult = await pool.query('SELECT COUNT(*) FROM email_logs WHERE user_id = $1', [
-      req.userId,
-    ]);
+    let countQuery = 'SELECT COUNT(*) FROM email_logs';
+    let dataQuery = `SELECT el.*, i.invoice_number 
+       FROM email_logs el
+       LEFT JOIN invoices i ON el.invoice_id = i.id`;
+    let queryParams = [];
+
+    if (req.userRole !== 'admin') {
+      countQuery += ' WHERE user_id = $1';
+      dataQuery += ' WHERE el.user_id = $1';
+      queryParams.push(req.userId);
+    }
+
+    const countResult = await pool.query(countQuery, queryParams);
     const totalCount = parseInt(countResult.rows[0].count);
 
-    const result = await pool.query(
-      `SELECT el.*, i.invoice_number 
-       FROM email_logs el
-       LEFT JOIN invoices i ON el.invoice_id = i.id
-       WHERE el.user_id = $1 
-       ORDER BY el.sent_at DESC 
-       LIMIT $2 OFFSET $3`,
-      [req.userId, limit, offset]
-    );
+    dataQuery += ` ORDER BY el.sent_at DESC LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
+
+    const result = await pool.query(dataQuery, [...queryParams, limit, offset]);
 
     res.json({
       logs: result.rows,
@@ -183,14 +187,19 @@ router.get('/logs', authMiddleware, async (req, res) => {
 router.get('/logs/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await pool.query(
-      `SELECT el.*, i.invoice_number, c.name as customer_name
+    let query = `SELECT el.*, i.invoice_number, c.name as customer_name
        FROM email_logs el
        LEFT JOIN invoices i ON el.invoice_id = i.id
        LEFT JOIN customers c ON i.customer_id = c.id
-       WHERE el.id = $1 AND el.user_id = $2`,
-      [id, req.userId]
-    );
+       WHERE el.id = $1`;
+    let queryParams = [id];
+
+    if (req.userRole !== 'admin') {
+      query += ' AND el.user_id = $2';
+      queryParams.push(req.userId);
+    }
+
+    const result = await pool.query(query, queryParams);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Log not found' });
@@ -211,10 +220,15 @@ router.post('/logs/batch-delete', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Valid IDs array is required' });
     }
 
-    await pool.query('DELETE FROM email_logs WHERE id = ANY($1::int[]) AND user_id = $2', [
-      ids,
-      req.userId,
-    ]);
+    let query = 'DELETE FROM email_logs WHERE id = ANY($1::int[])';
+    let queryParams = [ids];
+
+    if (req.userRole !== 'admin') {
+      query += ' AND user_id = $2';
+      queryParams.push(req.userId);
+    }
+
+    await pool.query(query, queryParams);
 
     res.json({ message: `${ids.length} email logs deleted successfully` });
   } catch (error) {

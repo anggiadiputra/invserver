@@ -446,20 +446,24 @@ router.get('/logs', authMiddleware, async (req, res) => {
     const page = Math.max(parseInt(req.query.page) || 1, 1); // Min 1
     const offset = (page - 1) * limit;
 
-    const countResult = await pool.query('SELECT COUNT(*) FROM whatsapp_logs WHERE user_id = $1', [
-      req.userId,
-    ]);
+    let countQuery = 'SELECT COUNT(*) FROM whatsapp_logs';
+    let dataQuery = `SELECT wl.*, i.invoice_number 
+       FROM whatsapp_logs wl
+       LEFT JOIN invoices i ON wl.invoice_id = i.id`;
+    let queryParams = [];
+
+    if (req.userRole !== 'admin') {
+      countQuery += ' WHERE user_id = $1';
+      dataQuery += ' WHERE wl.user_id = $1';
+      queryParams.push(req.userId);
+    }
+
+    const countResult = await pool.query(countQuery, queryParams);
     const totalCount = parseInt(countResult.rows[0].count);
 
-    const result = await pool.query(
-      `SELECT wl.*, i.invoice_number 
-       FROM whatsapp_logs wl
-       LEFT JOIN invoices i ON wl.invoice_id = i.id
-       WHERE wl.user_id = $1 
-       ORDER BY wl.sent_at DESC 
-       LIMIT $2 OFFSET $3`,
-      [req.userId, limit, offset]
-    );
+    dataQuery += ` ORDER BY wl.sent_at DESC LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
+
+    const result = await pool.query(dataQuery, [...queryParams, limit, offset]);
 
     res.json({
       logs: result.rows,
@@ -487,14 +491,19 @@ router.get('/logs/:id', authMiddleware, async (req, res) => {
     if (isNaN(parsedId) || parsedId <= 0) {
       return res.status(400).json({ error: 'Invalid log ID' });
     }
-    const result = await pool.query(
-      `SELECT wl.*, i.invoice_number, c.name as customer_name
+    let query = `SELECT wl.*, i.invoice_number, c.name as customer_name
        FROM whatsapp_logs wl
        LEFT JOIN invoices i ON wl.invoice_id = i.id
        LEFT JOIN customers c ON i.customer_id = c.id
-       WHERE wl.id = $1 AND wl.user_id = $2`,
-      [parsedId, req.userId]
-    );
+       WHERE wl.id = $1`;
+    let queryParams = [parsedId];
+
+    if (req.userRole !== 'admin') {
+      query += ' AND wl.user_id = $2';
+      queryParams.push(req.userId);
+    }
+
+    const result = await pool.query(query, queryParams);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Log not found' });
@@ -520,10 +529,15 @@ router.post('/logs/batch-delete', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'All IDs must be positive integers' });
     }
 
-    await pool.query('DELETE FROM whatsapp_logs WHERE id = ANY($1::int[]) AND user_id = $2', [
-      parsedIds,
-      req.userId,
-    ]);
+    let query = 'DELETE FROM whatsapp_logs WHERE id = ANY($1::int[])';
+    let queryParams = [parsedIds];
+
+    if (req.userRole !== 'admin') {
+      query += ' AND user_id = $2';
+      queryParams.push(req.userId);
+    }
+
+    await pool.query(query, queryParams);
 
     res.json({ message: `${parsedIds.length} WhatsApp logs deleted successfully` });
   } catch (error) {
