@@ -125,6 +125,12 @@ router.post('/send-invoice', authMiddleware, async (req, res) => {
       [req.userId, customer.email, subject, invoiceId, 'sent']
     );
 
+    // 5. Update invoice status to 'sent'
+    await pool.query('UPDATE invoices SET status = $1, updated_at = NOW() WHERE id = $2', [
+      'sent',
+      invoiceId,
+    ]);
+
     res.json({
       success: true,
       message: 'Email sent successfully',
