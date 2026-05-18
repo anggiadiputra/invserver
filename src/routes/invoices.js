@@ -123,6 +123,45 @@ router.get('/stats/monthly', authMiddleware, async (req, res) => {
   }
 });
 
+// Get daily revenue statistics for a given month
+// Query params: ?year=2025&month=5
+router.get('/stats/daily', authMiddleware, async (req, res) => {
+  try {
+    const year = parseInt(req.query.year) || new Date().getFullYear();
+    const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
+
+    const result = await pool.query(
+      `WITH days AS (
+        SELECT generate_series(
+          DATE_TRUNC('month', TO_DATE($2 || '-' || $3, 'YYYY-MM'))::date,
+          (DATE_TRUNC('month', TO_DATE($2 || '-' || $3, 'YYYY-MM')) + INTERVAL '1 month - 1 day')::date,
+          '1 day'
+        )::date AS day
+      )
+      SELECT
+        d.day::text AS date,
+        COALESCE(COUNT(i.id), 0) AS total_invoices,
+        COALESCE(SUM(CASE WHEN i.status = 'paid' THEN (i.total_amount + COALESCE(i.tax_amount, 0)) ELSE 0 END), 0) AS paid_amount,
+        COALESCE(SUM(CASE WHEN i.status IN ('sent', 'overdue', 'pending') THEN (i.total_amount + COALESCE(i.tax_amount, 0)) ELSE 0 END), 0) AS pending_amount,
+        COALESCE(COUNT(CASE WHEN i.status = 'paid' THEN 1 END), 0) AS paid_count,
+        COALESCE(COUNT(CASE WHEN i.status IN ('sent', 'overdue', 'pending') THEN 1 END), 0) AS pending_count
+      FROM days d
+      LEFT JOIN invoices i
+        ON i.issue_date::date = d.day
+        AND i.user_id = $1
+        AND i.invoice_type = 'regular'
+      GROUP BY d.day
+      ORDER BY d.day ASC`,
+      [req.userId, String(year), String(month).padStart(2, '0')]
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching daily statistics:', error);
+    res.status(500).json({ error: 'Failed to fetch daily statistics' });
+  }
+});
+
 // Create invoice
 router.post('/', authMiddleware, checkInvoiceQuota, async (req, res) => {
   try {
