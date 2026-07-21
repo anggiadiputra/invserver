@@ -302,6 +302,10 @@ router.post(
     console.log(`For User: ${user.email}`);
     console.log(`Link: ${resetUrl}`);
     console.log('=============================================\n');
+    // Only print reset URL in non-production (dev needs this since SMTP likely unconfigured)
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[Dev] Reset URL printed above. In production, the link is only sent via email.');
+    }
 
     try {
       const systemResult = await pool.query('SELECT * FROM system_settings LIMIT 1');

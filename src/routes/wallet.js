@@ -268,8 +268,7 @@ router.post('/topup', authMiddleware, async (req, res) => {
     } catch (e) {
       console.error('[Topup Error Detail]:', e);
       return res.status(500).json({
-        error: `Gagal inisialisasi: ${e.message}`,
-        detail: e.stack,
+        error: `Gagal inisialisasi pembayaran. Silakan coba lagi.`,
       });
     }
   } catch (error) {

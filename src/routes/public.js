@@ -194,4 +194,10 @@ router.post('/verify-turnstile', async (req, res) => {
   }
 });
 
+// robots.txt — prevent search engine indexing
+router.get('/robots', (req, res) => {
+  res.type('text/plain');
+  res.send('User-agent: *\nDisallow: /\n');
+});
+
 export default router;

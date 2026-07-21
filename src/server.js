@@ -62,6 +62,69 @@ app.use(
 
 app.use(express.json());
 
+// Per-endpoint rate limiters
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // 10 attempts per 15 minutes
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login/register attempts from this IP, please try again after 15 minutes' }
+});
+
+const webhookLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' }
+});
+
+// Apply strict rate limiters to sensitive routes
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+app.use('/api/auth/forgot-password', authLimiter);
+app.use('/api/auth/reset-password', authLimiter);
+app.use('/api/wallet/webhook', webhookLimiter);
+
+// CSRF protection via Origin/Referrer check (for POST/PUT/DELETE)
+app.use((req, res, next) => {
+  if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) return next();
+  
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const allowedOrigins = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'https://app.diurusin.id',
+    frontendUrl,
+  ].filter(Boolean).map(u => u.replace(/\/$/, ''));
+
+  const origin = req.headers['origin'];
+  const referer = req.headers['referer'];
+
+  // Skip CSRF check for webhooks and public routes (no origin header expected)
+  if (req.path.startsWith('/api/wallet/webhook') || req.path.startsWith('/api/public')) return next();
+
+  // If there's an Origin header, it must be allowed
+  if (origin) {
+    const normalized = origin.replace(/\/$/, '');
+    const isAllowed = allowedOrigins.some(a => normalized.startsWith(a) || a.startsWith(normalized));
+    if (!isAllowed) {
+      return res.status(403).json({ error: 'CSRF: Invalid origin' });
+    }
+  } else {
+    // No Origin header — check Referer as fallback
+    if (referer) {
+      const isAllowed = allowedOrigins.some(a => referer.startsWith(a));
+      if (!isAllowed) {
+        return res.status(403).json({ error: 'CSRF: Invalid referer' });
+      }
+    }
+    // If neither Origin nor Referer, allow through (browser direct request)
+  }
+
+  next();
+});
+
 // Global Rate Limiting
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes

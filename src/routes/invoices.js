@@ -185,6 +185,35 @@ router.post('/', authMiddleware, checkInvoiceQuota, async (req, res) => {
     try {
       await client.query('BEGIN');
 
+      // Atomic quota enforcement within the same transaction
+      const quotaCheck = await client.query(
+        `SELECT p.max_invoices, s.is_lifetime
+         FROM subscriptions s
+         JOIN plans p ON s.plan_id = p.id
+         WHERE s.user_id = $1
+         FOR UPDATE OF s`,
+        [req.userId]
+      );
+
+      if (quotaCheck.rows.length > 0) {
+        const { max_invoices, is_lifetime } = quotaCheck.rows[0];
+        if (!is_lifetime && max_invoices !== -1) {
+          const countResult = await client.query(
+            'SELECT COUNT(*) as count FROM invoices WHERE user_id = $1',
+            [req.userId]
+          );
+          const currentCount = parseInt(countResult.rows[0].count);
+          if (currentCount >= max_invoices) {
+            await client.query('ROLLBACK');
+            return res.status(402).json({
+              error: `Invoice limit reached (${currentCount}/${max_invoices}). Please upgrade your plan to create more.`,
+              code: 'QUOTA_EXCEEDED',
+              upgrade_url: '/pricing',
+            });
+          }
+        }
+      }
+
       // Calculate totals using utility
       const { totalAmount, taxAmount } = calculateInvoiceTotals(items, {
         show_discount: !!show_discount,

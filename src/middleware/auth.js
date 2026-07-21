@@ -2,7 +2,11 @@ import jwt from 'jsonwebtoken';
 import pool from '../db/pool.js';
 import crypto from 'node:crypto';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('[CRITICAL] JWT_SECRET environment variable is not set. Server cannot start safely.');
+  process.exit(1);
+}
 const NEON_JWKS_URL = process.env.NEON_JWKS_URL || '';
 
 // ─── Local JWT (legacy email/password) ──────────────────────────────────────

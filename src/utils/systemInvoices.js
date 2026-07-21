@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import pool from '../db/pool.js';
 import { sendSystemInvoiceNotifications } from './notifications.js';
 
@@ -17,7 +18,7 @@ export async function generateSystemInvoice(userId, type, amount, description, r
     else if (type === 'subscription') prefix = 'SUBS';
     else if (type === 'refund') prefix = 'REFUND';
     
-    const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const randomSuffix = crypto.randomUUID().slice(0, 8).toUpperCase();
     const invoiceNumber = `${prefix}-${dateStr}-${randomSuffix}`;
 
     // 2. Create System Invoice Record (Automatically PAID)

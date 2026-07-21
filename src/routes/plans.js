@@ -159,24 +159,28 @@ router.post('/upgrade', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'Plan ID is required' });
   }
 
+  // Use shared transaction to ensure atomicity of deduction + subscription update
+  const client = await pool.connect();
   try {
-    // 1. Get Plan details
-    const planResult = await pool.query('SELECT * FROM plans WHERE id = $1', [planId]);
+    await client.query('BEGIN');
+
+    // 1. Get Plan details (locked to prevent race)
+    const planResult = await client.query('SELECT * FROM plans WHERE id = $1 FOR UPDATE', [planId]);
     if (planResult.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Plan not found' });
     }
     const targetPlan = planResult.rows[0];
 
-    // 2. Check current subscription
-    const subResult = await pool.query(
-      'SELECT s.*, p.slug as current_plan_slug FROM subscriptions s JOIN plans p ON s.plan_id = p.id WHERE s.user_id = $1',
+    // 2. Check current subscription (locked)
+    const subResult = await client.query(
+      'SELECT s.*, p.slug as current_plan_slug FROM subscriptions s JOIN plans p ON s.plan_id = p.id WHERE s.user_id = $1 FOR UPDATE',
       [userId]
     );
     const currentSub = subResult.rows[0];
 
-    // 2.5. Prevent duplicate transactions (Idempotency check)
-    // Check if there was a successful deduction for the same plan in the last 5 minutes
-    const recentTx = await pool.query(
+    // 3. Prevent duplicate transactions (Idempotency check)
+    const recentTx = await client.query(
       `SELECT id FROM wallet_transactions 
        WHERE user_id = $1 
        AND type = 'deduction' 
@@ -187,49 +191,58 @@ router.post('/upgrade', authMiddleware, async (req, res) => {
     );
 
     if (recentTx.rows.length > 0) {
+      await client.query('ROLLBACK');
       return res.status(429).json({ 
         error: 'Transaksi paket ini baru saja berhasil dilakukan. Jika saldo Anda terpotong namun paket belum berubah, silakan tunggu 1-2 menit atau hubungi bantuan.' 
       });
     }
 
-    // 3. Deduct balance via WalletService
-    // description: Upgrade ke [Plan Name]
+    // 4. Check wallet balance and deduct (atomically within shared transaction)
+    const walletResult = await client.query(
+      'SELECT balance FROM user_wallets WHERE user_id = $1 FOR UPDATE',
+      [userId]
+    );
+    const wallet = walletResult.rows[0];
+    if (!wallet || parseFloat(wallet.balance) < targetPlan.price_monthly) {
+      await client.query('ROLLBACK');
+      return res.status(402).json({ error: 'Saldo tidak cukup untuk upgrade Paket' });
+    }
+
+    const newBalance = parseFloat(wallet.balance) - targetPlan.price_monthly;
     const subRefId = `SUB-${userId}-${Date.now()}`;
-    await WalletService.deductBalance(
-      userId,
-      targetPlan.price_monthly,
-      `Upgrade/Pembaruan paket ke ${targetPlan.name}`,
-      subRefId
+
+    await client.query(
+      `UPDATE user_wallets SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2`,
+      [newBalance, userId]
     );
 
-    // 4. Update Subscription
-    // Logic Model A: Access until end of period.
-    // If upgrading from Free, we start 30 days from now.
-    // If renewing same plan, we add 30 days to current expiry if it's in the future.
+    await client.query(
+      `INSERT INTO wallet_transactions (user_id, type, amount, balance_after, description, payment_order_id, status)
+       VALUES ($1, 'deduction', $2, $3, $4, $5, 'completed')`,
+      [userId, targetPlan.price_monthly, newBalance, `Upgrade/Pembaruan paket ke ${targetPlan.name}`, subRefId]
+    );
 
+    // 5. Update Subscription
     let newExpiry = new Date();
     if (currentSub && currentSub.expires_at && new Date(currentSub.expires_at) > new Date()) {
       newExpiry = new Date(currentSub.expires_at);
     }
     newExpiry.setDate(newExpiry.getDate() + 30);
 
-    const updatedSub = await pool.query(
-      `
-      UPDATE subscriptions 
-      SET 
-        plan_id = $1, 
-        status = 'active', 
-        expires_at = $2,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE user_id = $3
-      RETURNING *
-    `,
+    const updatedSub = await client.query(
+      `UPDATE subscriptions 
+       SET plan_id = $1, status = 'active', expires_at = $2, updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = $3
+       RETURNING *`,
       [targetPlan.id, newExpiry, userId]
     );
 
+    await client.query('COMMIT');
+    client.release();
+
     const subscription = updatedSub.rows[0];
 
-    // Generate system invoice for subscription
+    // Generate system invoice (non-critical, fire-and-forget)
     generateSystemInvoice(
       userId,
       'subscription',
@@ -243,9 +256,8 @@ router.post('/upgrade', authMiddleware, async (req, res) => {
       subscription,
     });
   } catch (error) {
-    if (error.message === 'INSUFFICIENT_BALANCE') {
-      return res.status(402).json({ error: 'Saldo tidak cukup untuk upgrade Paket' });
-    }
+    await client.query('ROLLBACK').catch(() => {});
+    client.release();
     console.error('Upgrade error:', error);
     res.status(500).json({ error: 'Gagal melakukan upgrade langganan' });
   }

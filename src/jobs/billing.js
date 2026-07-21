@@ -26,6 +26,113 @@ export const stopBillingJob = () => {
   }
 };
 
+async function handleSubscriptionRenewal(sub) {
+  const { user_id, price_monthly, plan_name, subscription_id, status, expires_at } = sub;
+
+  // Use shared transaction for atomic deduction + subscription update
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Lock the subscription row
+    const lockedSub = await client.query(
+      'SELECT * FROM subscriptions WHERE id = $1 FOR UPDATE',
+      [subscription_id]
+    );
+    if (lockedSub.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return;
+    }
+
+    // Lock the wallet row
+    const walletResult = await client.query(
+      'SELECT balance FROM user_wallets WHERE user_id = $1 FOR UPDATE',
+      [user_id]
+    );
+    const wallet = walletResult.rows[0];
+
+    if (!wallet || parseFloat(wallet.balance) < price_monthly) {
+      // Insufficient balance — handle failure within the same transaction
+      await handleFailure(client, sub);
+      await client.query('COMMIT');
+      return;
+    }
+
+    // Deduct balance
+    const newBalance = parseFloat(wallet.balance) - price_monthly;
+    await client.query(
+      'UPDATE user_wallets SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2',
+      [newBalance, user_id]
+    );
+
+    const refId = `AUTO-${user_id}-${Date.now()}`;
+    await client.query(
+      `INSERT INTO wallet_transactions (user_id, type, amount, balance_after, description, payment_order_id, status)
+       VALUES ($1, 'deduction', $2, $3, $4, $5, 'completed')`,
+      [user_id, price_monthly, newBalance, `Perpanjangan paket ${plan_name} (Auto-renewal)`, refId]
+    );
+
+    // Update subscription
+    await client.query(
+      `UPDATE subscriptions 
+       SET status = 'active', expires_at = COALESCE(expires_at, CURRENT_DATE) + INTERVAL '30 days',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [subscription_id]
+    );
+
+    await client.query('COMMIT');
+    client.release();
+
+    console.log(`[BillingJob] Successfully renewed User ${user_id} for ${plan_name}`);
+
+    // System invoice (non-critical)
+    try {
+      const { generateSystemInvoice } = await import('../utils/systemInvoices.js');
+      await generateSystemInvoice(
+        user_id, 'subscription', price_monthly,
+        `Pembayaran Paket: ${plan_name} (Auto-renewal)`, refId
+      );
+    } catch { /* ignore */ }
+
+    await sendNotification(sub, 'success');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    client.release();
+    throw error;
+  }
+}
+
+async function handleFailure(client, sub) {
+  // Previous handleSubscriptionRenewal failure logic extracted
+  const { user_id, price_monthly, plan_name, subscription_id, status, expires_at } = sub;
+
+  await sendNotification(sub, 'warning');
+
+  const gracePeriodDays = 7;
+  const expiryDate = new Date(expires_at || new Date());
+  const now = new Date();
+  const diffDays = Math.ceil((now - expiryDate) / (1000 * 60 * 60 * 24));
+
+  if (diffDays > gracePeriodDays) {
+    console.log(`[BillingJob] Grace period exceeded for User ${user_id}. Downgrading to Free.`);
+    const freePlan = await client.query("SELECT id FROM plans WHERE slug = 'free'");
+    const freePlanId = freePlan.rows[0]?.id;
+    if (freePlanId) {
+      await client.query(
+        `UPDATE subscriptions SET plan_id = $1, status = 'active', expires_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [freePlanId, subscription_id]
+      );
+    }
+    await sendNotification(sub, 'downgrade');
+  } else if (status !== 'grace_period') {
+    await client.query(
+      "UPDATE subscriptions SET status = 'grace_period', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+      [subscription_id]
+    );
+  }
+}
+
 async function processSubscriptions() {
   const client = await pool.connect();
   try {
