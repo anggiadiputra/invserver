@@ -36,29 +36,37 @@ const allowedOrigins = [
   .filter(Boolean)
   .map(url => url.replace(/\/$/, '')); // Remove trailing slashes
 
-// CORS must be the first middleware to handle OPTIONS preflight correctly
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      
-      const normalizedOrigin = origin.replace(/\/$/, '');
-      const isAllowed = allowedOrigins.includes(normalizedOrigin) || 
-                       /^http:\/\/localhost:\d+$/.test(normalizedOrigin);
-      
-      if (isAllowed) {
-        callback(null, true);
-      } else {
-        // Log origin mismatch in dev/logs if possible (not here, but logic-wise)
-        callback(null, false);
-      }
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'x-csrf-token'],
-    exposedHeaders: ['set-cookie'],
-  })
-);
+// CORS configuration
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (server-to-server, curl, etc.)
+    if (!origin) return callback(null, true);
+
+    const normalizedOrigin = origin.replace(/\/$/, '');
+    const isAllowed =
+      allowedOrigins.includes(normalizedOrigin) ||
+      /^http:\/\/localhost:\d+$/.test(normalizedOrigin) ||
+      /^http:\/\/127\.0\.0\.1:\d+$/.test(normalizedOrigin);
+
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin '${origin}' not allowed`));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'x-csrf-token'],
+  exposedHeaders: ['set-cookie'],
+  optionsSuccessStatus: 204, // Some legacy browsers choke on 204
+};
+
+// Handle OPTIONS preflight FIRST — before any other middleware
+// This is critical on Vercel serverless where preflight can be intercepted early
+app.options('*', cors(corsOptions));
+
+// Apply CORS to all routes
+app.use(cors(corsOptions));
 
 app.use(express.json());
 
