@@ -52,7 +52,7 @@ export async function generateSystemInvoice(userId, type, amount, description, r
     // 5. Link to wallet transaction if refId matches
     if (refId) {
       await pool.query(
-        'UPDATE wallet_transactions SET system_invoice_id = $1 WHERE user_id = $2 AND pakasir_order_id = $3',
+        'UPDATE wallet_transactions SET system_invoice_id = $1 WHERE user_id = $2 AND payment_order_id = $3',
         [invoice.id, userId, refId]
       );
     }

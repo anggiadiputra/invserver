@@ -8,7 +8,7 @@ export class WalletService {
     userId,
     amount,
     description,
-    pakasirOrderId,
+    paymentOrderId,
     paymentUrl,
     paymentMethod,
     paymentNumber,
@@ -20,7 +20,7 @@ export class WalletService {
     try {
       await pool.query(
         `
-        INSERT INTO wallet_transactions (user_id, type, amount, fee_amount, balance_after, description, pakasir_order_id, payment_url, payment_method, payment_number, status, expired_at)
+        INSERT INTO wallet_transactions (user_id, type, amount, fee_amount, balance_after, description, payment_order_id, payment_url, payment_method, payment_number, status, expired_at)
         VALUES ($1, 'deposit', $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10)
       `,
         [
@@ -29,7 +29,7 @@ export class WalletService {
           feeAmount || 0,
           currentBalance,
           description || 'Top-up',
-          pakasirOrderId,
+          paymentOrderId,
           paymentUrl || null,
           paymentMethod || null,
           paymentNumber || null,
@@ -47,11 +47,11 @@ export class WalletService {
   /**
    * Marks a pending deposit as failed (expired or canceled).
    */
-  static async failDeposit(pakasirOrderId) {
+  static async failDeposit(paymentOrderId) {
     try {
       await pool.query(
-        'UPDATE wallet_transactions SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE pakasir_order_id = $2 AND status = $3',
-        ['failed', pakasirOrderId, 'pending']
+        'UPDATE wallet_transactions SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE payment_order_id = $2 AND status = $3',
+        ['failed', paymentOrderId, 'pending']
       );
       return true;
     } catch (err) {
@@ -63,15 +63,15 @@ export class WalletService {
   /**
    * Completes a pending deposit and updates user balance.
    */
-  static async completeDeposit(userId, pakasirOrderId) {
+  static async completeDeposit(userId, paymentOrderId) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
       // 1. Find the pending transaction
       const txResult = await client.query(
-        'SELECT amount, status FROM wallet_transactions WHERE pakasir_order_id = $1 AND status = $2 FOR UPDATE',
-        [pakasirOrderId, 'pending']
+        'SELECT amount, status FROM wallet_transactions WHERE payment_order_id = $1 AND status = $2 FOR UPDATE',
+        [paymentOrderId, 'pending']
       );
 
       if (txResult.rows.length === 0) {
@@ -103,9 +103,9 @@ export class WalletService {
         `
         UPDATE wallet_transactions 
         SET status = 'completed', balance_after = $1, updated_at = CURRENT_TIMESTAMP
-        WHERE pakasir_order_id = $2
+        WHERE payment_order_id = $2
       `,
-        [newBalance, pakasirOrderId]
+        [newBalance, paymentOrderId]
       );
 
       await client.query('COMMIT');
@@ -130,7 +130,7 @@ export class WalletService {
    * Adds balance to a user's wallet and logs the transaction.
    * (Direct version, used for manual adjustments etc.)
    */
-  static async addBalance(userId, amount, description, pakasirOrderId = null) {
+  static async addBalance(userId, amount, description, paymentOrderId = null) {
     const parsedAmount = Number(amount);
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
       throw new Error('INVALID_AMOUNT');
@@ -161,10 +161,10 @@ export class WalletService {
       // 2. Log transaction
       await client.query(
         `
-        INSERT INTO wallet_transactions (user_id, type, amount, balance_after, description, pakasir_order_id, status)
+        INSERT INTO wallet_transactions (user_id, type, amount, balance_after, description, payment_order_id, status)
         VALUES ($1, 'deposit', $2, $3, $4, $5, 'completed')
       `,
-        [userId, parsedAmount, newBalance, description, pakasirOrderId]
+        [userId, parsedAmount, newBalance, description, paymentOrderId]
       );
 
       await client.query('COMMIT');
@@ -225,7 +225,7 @@ export class WalletService {
       // 3. Log transaction
       await client.query(
         `
-        INSERT INTO wallet_transactions (user_id, type, amount, balance_after, description, pakasir_order_id, status)
+        INSERT INTO wallet_transactions (user_id, type, amount, balance_after, description, payment_order_id, status)
         VALUES ($1, 'deduction', $2, $3, $4, $5, 'completed')
       `,
         [userId, -parsedAmount, newBalance, description, referenceId]

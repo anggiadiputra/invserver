@@ -230,9 +230,10 @@ router.put('/system', authMiddleware, adminOnly, async (req, res) => {
       'smtp_encryption',
       'smtp_test_target',
       'smtp_test_message',
-      'pakasir_slug',
-      'pakasir_api_key',
-      'pakasir_is_sandbox',
+      'sumopod_api_key',
+      'sumopod_is_sandbox',
+      'sumopod_webhook_token',
+      'sumopod_webhook_secret',
     ];
 
     const updates = [];

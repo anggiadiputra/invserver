@@ -603,6 +603,28 @@ async function migrate() {
       END $$;
     `);
 
+    // --- Sumopod Payment Gateway migration ---
+    // Add Sumopod config columns to system_settings
+    await client.query(`
+      ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS sumopod_api_key TEXT;
+      ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS sumopod_is_sandbox BOOLEAN DEFAULT true;
+      ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS sumopod_webhook_token TEXT;
+      ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS sumopod_webhook_secret TEXT;
+    `);
+
+    // Rename pakasir_order_id → payment_order_id in wallet_transactions
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'wallet_transactions' AND column_name = 'pakasir_order_id'
+        ) THEN
+          ALTER TABLE wallet_transactions RENAME COLUMN pakasir_order_id TO payment_order_id;
+        END IF;
+      END $$;
+    `);
+
     console.log('✅ Migrations and restoration completed successfully');
   } catch (error) {
     console.error('❌ Migration error:', error);

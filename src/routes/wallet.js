@@ -2,28 +2,29 @@ import express from 'express';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { WalletService } from '../services/wallet.js';
 import pool from '../db/pool.js';
-import { Pakasir } from 'pakasir-sdk';
 import { generateSystemInvoice } from '../utils/systemInvoices.js';
 
 const router = express.Router();
 
 /**
- * Get internal Pakasir instance
+ * Get Sumopod config from system_settings
  */
-async function getPakasirInstance() {
+async function getSumopodConfig() {
   const settingsResult = await pool.query(
-    'SELECT pakasir_slug, pakasir_api_key, pakasir_is_sandbox FROM system_settings LIMIT 1'
+    'SELECT sumopod_api_key, sumopod_is_sandbox FROM system_settings LIMIT 1'
   );
   const settings = settingsResult.rows[0];
 
-  if (!settings || !settings.pakasir_slug || !settings.pakasir_api_key) {
+  if (!settings || !settings.sumopod_api_key) {
     throw new Error('System is not configured for payments. Please contact admin.');
   }
 
-  return new Pakasir({
-    slug: settings.pakasir_slug,
-    apikey: settings.pakasir_api_key,
-  });
+  const isSandbox = settings.sumopod_is_sandbox !== false; // default true (sandbox)
+  const baseUrl = isSandbox
+    ? 'https://api-pay-sandbox.sumopod.com'
+    : 'https://api-pay.sumopod.com';
+
+  return { apiKey: settings.sumopod_api_key, baseUrl, isSandbox };
 }
 
 function parseAmount(value) {
@@ -64,7 +65,7 @@ router.get('/all-transactions', authMiddleware, adminOnly, async (req, res) => {
            OR u.first_name ILIKE $1 
            OR u.last_name ILIKE $1 
            OR wt.description ILIKE $1 
-           OR wt.pakasir_order_id ILIKE $1
+           OR wt.payment_order_id ILIKE $1
            OR i.invoice_number ILIKE $1
            OR si.invoice_number ILIKE $1
       `;
@@ -186,7 +187,7 @@ router.post('/manual-adjust', authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
-// Initiate Top-up with Pakasir SDK (Direct API)
+// Initiate Top-up with Sumopod API
 router.post('/topup', authMiddleware, async (req, res) => {
   try {
     const { amount, method } = req.body;
@@ -202,25 +203,41 @@ router.post('/topup', authMiddleware, async (req, res) => {
     }
 
     const orderId = `TOPUP-${userId}-${Date.now()}`;
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 
     try {
-      const pakasir = await getPakasirInstance();
-      const result = await pakasir.createPayment(method, orderId, parsedAmount);
-      console.log('[Pakasir Create Response]:', JSON.stringify(result, null, 2));
+      const { apiKey, baseUrl } = await getSumopodConfig();
 
-      // Calculate fee based on Pakasir Official Pricing
-      const calculateFee = (m, amt) => {
-        if (m === 'qris') {
-          return amt <= 105000 ? Math.ceil(amt * 0.007 + 310) : Math.ceil(amt * 0.01);
-        }
-        if (m.endsWith('_va')) {
-          return 3500;
-        }
-        return 0;
-      };
+      const response = await fetch(`${baseUrl}/api/v1/payments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Api-Key': apiKey,
+        },
+        body: JSON.stringify({
+          order_id: orderId,
+          amount: parsedAmount,
+          currency: 'IDR',
+          expires_in_hours: 24,
+          success_return_url: `${frontendUrl}/billing?paid=1`,
+          cancel_return_url: `${frontendUrl}/billing?cancelled=1`,
+          payment_method_type_code: method,
+        }),
+      });
 
-      const estimatedFee = calculateFee(method, parsedAmount);
-      const feeAmount = typeof result.fee === 'number' ? result.fee : Number(result.fee ?? estimatedFee);
+      if (!response.ok) {
+        const errBody = await response.text();
+        console.error('[Sumopod Create Error]:', response.status, errBody);
+        return res.status(502).json({
+          error: `Payment gateway error (${response.status}). Please try again later.`,
+        });
+      }
+
+      const result = await response.json();
+      console.log('[Sumopod Create Response]:', JSON.stringify(result, null, 2));
+
+      // Fee is returned by Sumopod, no need for manual calculation
+      const feeAmount = typeof result.fee === 'number' ? result.fee : Number(result.fee ?? 0);
       const totalAmount = parsedAmount + feeAmount;
 
       // Log as pending transaction so user can resume later
@@ -228,26 +245,28 @@ router.post('/topup', authMiddleware, async (req, res) => {
         userId,
         parsedAmount,
         `Top-up saldo (Order: ${orderId})`,
-        orderId,
-        result.payment_url || result.checkout_url || null,
-        result.payment_method || method || null,
-        result.payment_number || null,
-        result.expired_at || null,
+        orderId,                           // → payment_order_id
+        result.payment_link_url || null,   // → payment_url
+        method,                            // → payment_method
+        null,                              // → payment_number (Sumopod doesn't return this)
+        result.expires_at || null,
         feeAmount
       );
 
       res.json({
-        ...result,
+        payment_id: result.payment_id,
         order_id: orderId,
         amount: totalAmount,
         nominal: parsedAmount,
         fee_amount: feeAmount,
-        expired_at: result.expired_at || null,
+        payment_link_url: result.payment_link_url,
+        payment_method: method,
+        status: result.status || 'pending',
+        expires_at: result.expires_at || null,
         created_at: new Date().toISOString(),
       });
     } catch (e) {
       console.error('[Topup Error Detail]:', e);
-      // Directly expose the error message for debugging purposes
       return res.status(500).json({
         error: `Gagal inisialisasi: ${e.message}`,
         detail: e.stack,
@@ -259,19 +278,16 @@ router.post('/topup', authMiddleware, async (req, res) => {
   }
 });
 
-// Check Top-up Status and add balance if successful
+// Check Top-up Status
+// Note: Sumopod does not document a GET /payments/{id} endpoint.
+// We check our own DB. Once the webhook fires, the status will be 'completed'.
 router.post('/topup/check-status', authMiddleware, async (req, res) => {
   try {
-    const { order_id, amount } = req.body;
+    const { order_id } = req.body;
     const userId = req.userId;
 
-    if (!order_id || !amount) {
-      return res.status(400).json({ error: 'Order ID and amount are required' });
-    }
-
-    const parsedAmount = parseAmount(amount);
-    if (parsedAmount === null) {
-      return res.status(400).json({ error: 'Amount must be a positive number' });
+    if (!order_id) {
+      return res.status(400).json({ error: 'Order ID is required' });
     }
 
     // Security check: Make sure order_id belongs to the requester
@@ -279,33 +295,30 @@ router.post('/topup/check-status', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized to check this order status' });
     }
 
-    const pakasir = await getPakasirInstance();
-    const detail = await pakasir.detailPayment(order_id, parsedAmount);
+    // Look up the transaction in our DB
+    const txResult = await pool.query(
+      'SELECT status, amount FROM wallet_transactions WHERE user_id = $1 AND payment_order_id = $2',
+      [userId, order_id]
+    );
 
-    if (!detail) {
-      return res.status(404).json({ error: 'Payment not found' });
+    if (txResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Transaction not found' });
     }
 
-    // Note: Detail returns an object like { status: 'completed' | 'pending' | 'canceled' }
-    if (detail.status === 'completed') {
-      const completedBalance = await WalletService.completeDeposit(userId, order_id);
+    const tx = txResult.rows[0];
 
-      if (completedBalance !== false) {
-        // Generate system invoice for completed top-up
-        generateSystemInvoice(
-          userId,
-          'topup',
-          parsedAmount,
-          `Top-up Saldo (Order: ${order_id})`,
-          order_id
-        ).catch(console.error);
-      }
-    } else if (detail.status === 'canceled') {
-      // Mark as failed/expired in our DB
-      await WalletService.failDeposit(order_id);
+    if (tx.status === 'completed') {
+      // Generate system invoice if not already generated
+      generateSystemInvoice(
+        userId,
+        'topup',
+        parseFloat(tx.amount),
+        `Top-up Saldo (Order: ${order_id})`,
+        order_id
+      ).catch(console.error);
     }
 
-    res.json({ status: detail.status });
+    res.json({ status: tx.status });
   } catch (error) {
     console.error('Error checking top-up status:', error);
     res.status(500).json({ error: 'Failed to check top-up status' });
@@ -344,25 +357,43 @@ router.post('/topup/cancel', authMiddleware, async (req, res) => {
 });
 
 /**
- * Webhook Pakasir: Automatic Top-up confirmation
- * Note: This endpoint does NOT use authMiddleware as it's called by Pakasir server
+ * Webhook Sumopod: Automatic Top-up confirmation
+ * Verifies using X-Webhook-Token header (simpler alternative to Svix signature)
  */
-router.post('/webhook/pakasir', async (req, res) => {
+router.post('/webhook/sumopod', async (req, res) => {
   try {
-    const { order_id, amount, status } = req.body;
+    // 1. Verify X-Webhook-Token
+    const settingsResult = await pool.query(
+      'SELECT sumopod_webhook_token FROM system_settings LIMIT 1'
+    );
+    const expectedToken = settingsResult.rows[0]?.sumopod_webhook_token;
+    const receivedToken = req.headers['x-webhook-token'];
 
-    console.log(`[Webhook] Received Pakasir update for ${order_id}: ${status}`);
-
-    if (status !== 'completed') {
-      return res.json({ message: 'Status ignored' });
+    if (!expectedToken || expectedToken !== receivedToken) {
+      console.warn('[Webhook] Invalid or missing webhook token');
+      return res.status(401).json({ error: 'Invalid webhook token' });
     }
 
-    // 1. Resolve userId from order_id (Format: TOPUP-userId-timestamp)
-    if (!order_id || !order_id.startsWith('TOPUP-')) {
+    // 2. Parse Sumopod event
+    const { event_type, data } = req.body;
+
+    console.log(`[Webhook] Received Sumopod event: ${event_type} for order ${data?.order_id}`);
+
+    // Only process completed payments
+    if (event_type !== 'payment.completed') {
+      return res.json({ message: `Event ${event_type} ignored` });
+    }
+
+    if (!data || !data.order_id) {
+      return res.status(400).json({ error: 'Invalid webhook payload: missing order_id' });
+    }
+
+    // 3. Resolve userId from order_id (Format: TOPUP-{userId}-{timestamp})
+    if (!data.order_id.startsWith('TOPUP-')) {
       return res.status(400).json({ error: 'Invalid order format' });
     }
 
-    const parts = order_id.split('-');
+    const parts = data.order_id.split('-');
     if (parts.length < 3) {
       return res.status(400).json({ error: 'Invalid order format' });
     }
@@ -373,35 +404,29 @@ router.post('/webhook/pakasir', async (req, res) => {
       return res.status(400).json({ error: 'Could not resolve user from order' });
     }
 
-    // 2. Security: Always verify with Pakasir detail API to prevent fake webhooks
-    const parsedAmount = parseAmount(amount);
-    if (parsedAmount === null) {
-      return res.status(400).json({ error: 'Invalid amount provided' });
+    // 4. Complete the transaction (idempotent — completeDeposit checks FOR UPDATE)
+    const amount = parseAmount(data.amount) || parseAmount(data.net_amount);
+    if (amount === null) {
+      return res.status(400).json({ error: 'Invalid amount in webhook payload' });
     }
 
-    const pakasir = await getPakasirInstance();
-    const detail = await pakasir.detailPayment(order_id, parsedAmount);
-
-    if (!detail || detail.status !== 'completed') {
-      return res.status(400).json({ error: 'Payment verification failed' });
-    }
-
-    // 3. Complete the transaction
-    const completedBalance = await WalletService.completeDeposit(userId, order_id);
+    const completedBalance = await WalletService.completeDeposit(userId, data.order_id);
 
     if (completedBalance !== false) {
-      console.log(`[Webhook] Auto-completed balance for user ${userId}: Rp ${parsedAmount}`);
+      console.log(`[Webhook] Auto-completed balance for user ${userId}: Rp ${amount}`);
 
       // Generate system invoice
       generateSystemInvoice(
         userId,
         'topup',
-        parsedAmount,
-        `Top-up Saldo Otomatis (Order: ${order_id})`,
-        order_id
+        amount,
+        `Top-up Saldo Otomatis (Order: ${data.order_id})`,
+        data.order_id
       ).catch((err) => {
         console.error('[Webhook] Failed to generate system invoice:', err);
       });
+    } else {
+      console.log(`[Webhook] Transaction ${data.order_id} already completed or not found`);
     }
 
     res.json({ success: true, message: 'Webhook processed' });
