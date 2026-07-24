@@ -165,7 +165,7 @@ router.get('/stats/daily', authMiddleware, async (req, res) => {
 // Create invoice
 router.post('/', authMiddleware, checkInvoiceQuota, async (req, res) => {
   try {
-    const {
+    let {
       customer_id,
       invoice_number,
       issue_date,
@@ -177,8 +177,16 @@ router.post('/', authMiddleware, checkInvoiceQuota, async (req, res) => {
       show_tax,
     } = req.body;
 
-    if (!customer_id || !invoice_number) {
-      return res.status(400).json({ error: 'Customer and invoice number are required' });
+    if (!customer_id) {
+      return res.status(400).json({ error: 'Customer is required' });
+    }
+
+    if (!invoice_number) {
+      const crypto = await import('crypto');
+      const year = new Date().getFullYear();
+      const month = String(new Date().getMonth() + 1).padStart(2, '0');
+      const random = crypto.randomBytes(2).toString('hex').toUpperCase(); // 4 random hex chars
+      invoice_number = `INV-${year}${month}-${random}`;
     }
 
     const client = await pool.connect();
